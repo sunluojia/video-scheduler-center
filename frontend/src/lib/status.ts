@@ -23,20 +23,30 @@ export const creatorStatus: Labels<Schemas["CreatorStatus"]> = {
   invalid: ["无法识别", "muted"],
 };
 
+export const creatorProgress: Labels<Schemas["CreatorProgress"]> = {
+  pending: creatorStatus.pending,
+  crawling: creatorStatus.crawling,
+  downloading: ["下载中", "active"],
+  audio_analysis: ["音频分析中", "active"],
+  video_analysis: ["视频分析中", "active"],
+  summarizing: creatorStatus.summarizing,
+  completed: creatorStatus.completed,
+  failed: creatorStatus.failed,
+  recrawl: ["需要重新抓取", "attention"],
+  invalid: creatorStatus.invalid,
+};
+
 /** 达人还在处理中的环节，按流程先后排列。 */
-export const creatorFlow: Schemas["CreatorStatus"][] = [
+export const creatorFlow: Schemas["CreatorProgress"][] = [
   "pending",
   "crawling",
-  "analyzing",
+  "downloading",
+  "audio_analysis",
+  "video_analysis",
   "summarizing",
 ];
 /** 达人已得出结论的状态。 */
-export const creatorFinal: Schemas["CreatorStatus"][] = [
-  "completed",
-  "failed",
-  "recrawl",
-  "invalid",
-];
+export const creatorFinal = ["completed", "failed", "recrawl", "invalid"] as const;
 
 export const workStatus: Labels<Schemas["WorkStatus"]> = {
   skipped: ["图文", "muted"],

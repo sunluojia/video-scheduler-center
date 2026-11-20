@@ -15,6 +15,7 @@ test("登记执行程序后等待心跳，离线记录可删除", async ({ page 
     withdrawn_at: null,
     crawl_slots: 2,
     download_slots: 4,
+    warm_slots: 1,
   };
   const existing = [crawler, { ...crawler, instance_id: "crawler-stopped", online: false }];
   await mockApi(page, {
@@ -83,21 +84,23 @@ test("在页面上改爬取程序的并发", async ({ page }) => {
     withdrawn_at: null,
     crawl_slots: 2,
     download_slots: 4,
+    warm_slots: 1,
   };
   await mockApi(page, {
     "GET /api/executors": [crawler],
     "GET /api/identities": { target: 8, devices: [], alerts: [] },
     "GET /api/proxy-alerts": [],
-    "PUT /api/executors/crawler/crawler-1/slots": { ...crawler, crawl_slots: 4 },
+    "PUT /api/executors/crawler/crawler-1/slots": { ...crawler, crawl_slots: 4, warm_slots: 3 },
   });
   await page.goto("/executors");
 
-  await page.getByRole("button", { name: "采集 2 · 下载 4" }).click();
+  await page.getByRole("button", { name: "采集 2 · 下载 4 · 预热 1" }).click();
   const dialog = page.getByRole("dialog", { name: "并发" });
   await dialog.getByLabel("同时采集达人").fill("4");
+  await dialog.getByLabel("同时预热账号").fill("3");
   const sent = page.waitForRequest((request) => request.url().endsWith("/slots"));
   await dialog.getByRole("button", { name: "保存" }).click();
-  expect((await sent).postDataJSON()).toEqual({ crawl_slots: 4, download_slots: 4 });
+  expect((await sent).postDataJSON()).toEqual({ crawl_slots: 4, download_slots: 4, warm_slots: 3 });
   await expect(page.getByText("crawler-1 下一次心跳（15 秒内）按新的并发运行")).toBeVisible();
 });
 

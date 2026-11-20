@@ -77,7 +77,7 @@ const columns: ColumnDef<Executor, unknown>[] = [
   },
   {
     header: "任务并发",
-    size: 170,
+    size: 215,
     cell: ({ row }) =>
       row.original.kind === "crawler" ? (
         <SlotsDialog executor={row.original} />
@@ -212,7 +212,7 @@ function AddExecutor() {
   );
 }
 
-/** 爬取程序同时获取几个达人、同时下载几条；它下一次心跳拿到，不用重启。 */
+/** 采集、下载和预热并发随下一次心跳下发。 */
 function SlotsDialog({ executor }: { executor: Executor }) {
   const [open, setOpen] = useState(false);
   const done = useDone();
@@ -231,6 +231,7 @@ function SlotsDialog({ executor }: { executor: Executor }) {
       body: {
         crawl_slots: Number(form.get("crawl_slots")),
         download_slots: Number(form.get("download_slots")),
+        warm_slots: Number(form.get("warm_slots")),
       },
     });
   }
@@ -239,7 +240,8 @@ function SlotsDialog({ executor }: { executor: Executor }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size="sm" variant="ghost" className="h-7 px-2 font-mono text-xs">
-          采集 {executor.crawl_slots} · 下载 {executor.download_slots}
+          采集 {executor.crawl_slots} · 下载 {executor.download_slots} · 预热{" "}
+          {executor.warm_slots ?? 1}
           <Pencil className="size-3" />
         </Button>
       </DialogTrigger>
@@ -272,6 +274,16 @@ function SlotsDialog({ executor }: { executor: Executor }) {
               min={1}
               max={32}
               defaultValue={executor.download_slots}
+              required
+            />
+          </Field>
+          <Field label="同时预热账号" hint="这台设备同时预热的身份数，使用「获取信息」线路。">
+            <Input
+              name="warm_slots"
+              type="number"
+              min={1}
+              max={16}
+              defaultValue={executor.warm_slots ?? 1}
               required
             />
           </Field>

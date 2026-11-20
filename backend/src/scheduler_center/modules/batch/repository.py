@@ -10,11 +10,13 @@ from scheduler_center.modules.batch.models import (
     Batch,
     BatchStatus,
     Creator,
+    CreatorProgress,
     CreatorStatus,
     Work,
     WorkKind,
     WorkStatus,
 )
+from scheduler_center.modules.batch.progress import creator_progress
 from scheduler_center.modules.batch.tables import batches, creators, qr_codes, works
 
 type Counts = dict[UUID, dict[str, int]]
@@ -33,9 +35,21 @@ class BatchRepository(Repository):
         stmt = select(batches.c.id).where(batches.c.status == BatchStatus.RUNNING)
         return list(await self._session.scalars(stmt))
 
-    async def creator_counts(self, batch_ids: Sequence[UUID]) -> Counts:
-        """各批次每种状态的达人数。"""
-        return await self._counts(creators, creators.c.batch_id.in_(batch_ids))
+    async def creator_counts(self, batch_ids: Sequence[UUID]) -> tuple[Counts, Counts]:
+        """一次查询同时获取各批次的业务状态和工作台进度计数。"""
+        progress = creator_progress().label("progress")
+        stmt = (
+            select(creators.c.batch_id, creators.c.status, progress, func.count())
+            .where(creators.c.batch_id.in_(batch_ids))
+            .group_by(creators.c.batch_id, creators.c.status, "progress")
+        )
+        statuses: Counts = defaultdict(dict)
+        stages: Counts = defaultdict(dict)
+        for batch_id, status, stage, count in await self._session.execute(stmt):
+            by_status, by_stage = statuses[batch_id], stages[batch_id]
+            by_status[status] = by_status.get(status, 0) + count
+            by_stage[stage] = by_stage.get(stage, 0) + count
+        return statuses, stages
 
     async def video_counts(self, batch_ids: Sequence[UUID]) -> Counts:
         """各批次每种状态的视频数。"""
@@ -80,10 +94,19 @@ class CreatorRepository(Repository):
         keyword: str | None,
         offset: int,
         limit: int,
-    ) -> tuple[list[Creator], int]:
-        stmt = select(Creator).where(creators.c.batch_id == batch_id).order_by(creators.c.position)
+        *,
+        progress: CreatorProgress | None = None,
+    ) -> tuple[list[tuple[Creator, CreatorProgress]], int]:
+        stage = creator_progress().label("progress")
+        stmt = (
+            select(Creator, stage)
+            .where(creators.c.batch_id == batch_id)
+            .order_by(creators.c.position)
+        )
         if status is not None:
             stmt = stmt.where(creators.c.status == status)
+        if progress is not None:
+            stmt = stmt.where(stage == progress.value)
         if keyword:
             pattern = f"%{keyword}%"
             stmt = stmt.where(
@@ -93,7 +116,11 @@ class CreatorRepository(Repository):
                     creators.c.oecuid.ilike(pattern),
                 )
             )
-        return await self._page(stmt, offset, limit)
+        total = await self._session.scalar(
+            stmt.with_only_columns(func.count(), maintain_column_froms=True).order_by(None)
+        )
+        rows = await self._session.execute(stmt.offset(offset).limit(limit))
+        return [(item, CreatorProgress(value)) for item, value in rows], total or 0
 
     async def unfinished(self, batch_id: UUID) -> int:
         stmt = select(func.count()).where(

@@ -1077,6 +1077,10 @@ export interface components {
             creators: {
                 [key: string]: number;
             };
+            /** Creator Progress */
+            creator_progress: {
+                [key: string]: number;
+            };
             /** Videos */
             videos: {
                 [key: string]: number;
@@ -1220,6 +1224,12 @@ export interface components {
             /** History */
             history: components["schemas"]["EventView"][];
         };
+        /**
+         * CreatorProgress
+         * @description 批次工作台上每位达人当前所处的阶段。
+         * @enum {string}
+         */
+        CreatorProgress: "pending" | "crawling" | "downloading" | "audio_analysis" | "video_analysis" | "summarizing" | "completed" | "failed" | "recrawl" | "invalid";
         /** CreatorRow */
         CreatorRow: {
             /**
@@ -1255,6 +1265,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            progress: components["schemas"]["CreatorProgress"];
             /** Works */
             works: components["schemas"]["WorkView"][];
         };
@@ -1389,6 +1400,8 @@ export interface components {
             crawl_slots: number;
             /** Download Slots */
             download_slots: number;
+            /** Warm Slots */
+            warm_slots: number;
         };
         /** FolderIn */
         FolderIn: {
@@ -1939,6 +1952,8 @@ export interface components {
             crawl_slots?: number | null;
             /** Download Slots */
             download_slots?: number | null;
+            /** Warm Slots */
+            warm_slots?: number | null;
         };
         /**
          * Retag
@@ -2069,6 +2084,8 @@ export interface components {
             crawl_slots: number;
             /** Download Slots */
             download_slots: number;
+            /** Warm Slots */
+            warm_slots?: number | null;
         };
         /**
          * Source
@@ -2553,6 +2570,7 @@ export interface operations {
             query?: {
                 status?: components["schemas"]["CreatorStatus"] | null;
                 q?: string | null;
+                progress?: components["schemas"]["CreatorProgress"] | null;
                 page?: number;
                 size?: number;
             };

@@ -12,7 +12,7 @@ from scheduler_center.core.database.engine import Database
 from scheduler_center.core.web.dependencies import DatabaseDep, PagingDep
 from scheduler_center.core.web.schemas import Page
 from scheduler_center.modules.analysis.messages import JobState
-from scheduler_center.modules.batch.models import Batch, BatchStatus, CreatorStatus
+from scheduler_center.modules.batch.models import Batch, BatchStatus, CreatorProgress, CreatorStatus
 from scheduler_center.modules.batch.repository import (
     BatchRepository,
     CreatorRepository,
@@ -133,18 +133,23 @@ async def list_creators(
     paging: PagingDep,
     status: CreatorStatus | None = None,
     q: str | None = None,
+    progress: CreatorProgress | None = None,
 ) -> Page[CreatorRow]:
     async with database.transaction() as session:
         items, total = await CreatorRepository(session).search(
-            batch_id, status, q, paging.offset, paging.size
+            batch_id, status, q, paging.offset, paging.size, progress=progress
         )
-        works = await WorkRepository(session).of_creators([item.id for item in items])
+        works = await WorkRepository(session).of_creators([item.id for item, _ in items])
+    works_of: dict[UUID, list[WorkView]] = defaultdict(list)
+    for work in works:
+        works_of[work.creator_id].append(WorkView.model_validate(work))
     rows = [
         CreatorRow(
             **CreatorView.model_validate(item).model_dump(),
-            works=[WorkView.model_validate(work) for work in works if work.creator_id == item.id],
+            progress=stage,
+            works=works_of.get(item.id, []),
         )
-        for item in items
+        for item, stage in items
     ]
     return Page(items=rows, total=total)
 
@@ -176,11 +181,13 @@ async def export(batch_id: UUID, database: DatabaseDep) -> Response:
 
 async def _rows(batches: BatchRepository, items: list[Batch]) -> list[BatchRow]:
     ids = [item.id for item in items]
-    creators, videos = await batches.creator_counts(ids), await batches.video_counts(ids)
+    creators, progress = await batches.creator_counts(ids)
+    videos = await batches.video_counts(ids)
     return [
         BatchRow(
             **BatchView.model_validate(item).model_dump(),
             creators=creators.get(item.id, {}),
+            creator_progress=progress.get(item.id, {}),
             videos=videos.get(item.id, {}),
         )
         for item in items

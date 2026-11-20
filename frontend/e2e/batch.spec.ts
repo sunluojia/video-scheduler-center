@@ -12,6 +12,7 @@ const batch = {
   started_at: now,
   finished_at: null,
   creators: { completed: 1, crawling: 1 },
+  creator_progress: { completed: 1, crawling: 1 },
   videos: { completed: 4, analyzing: 1 },
 };
 const creator = {
@@ -23,6 +24,7 @@ const creator = {
   handle: "alice",
   oecuid: null,
   status: "completed",
+  progress: "completed",
   note: null,
   labels: [],
   tags: ["连衣裙", "通勤"],
@@ -117,6 +119,54 @@ test("达人详情显示爬取程序回传的平台资料", async ({ page }) => 
     "href",
     profile.url,
   );
+});
+
+test("工作台显示十种达人进度并按所选阶段筛选", async ({ page }) => {
+  const workbench = {
+    ...batch,
+    creators: { analyzing: 3 },
+    creator_progress: { downloading: 1, audio_analysis: 1, video_analysis: 1 },
+  };
+  const audio = { ...creator, name: "音频达人", status: "analyzing", progress: "audio_analysis" };
+  const visual = { ...audio, id: "visual-creator", name: "视频达人", progress: "video_analysis" };
+  await mockApi(page, {
+    "GET /api/batches": { items: [workbench], total: 1 },
+    [`GET /api/batches/${BATCH_ID}`]: workbench,
+  });
+  await page.route(
+    (url) => url.pathname === `/api/batches/${BATCH_ID}/creators`,
+    (route) => {
+      const query = new URL(route.request().url()).searchParams.get("progress");
+      const items = [audio, visual].filter((item) => !query || item.progress === query);
+      return route.fulfill({ json: { items, total: items.length } });
+    },
+  );
+
+  await page.goto(`/batches/${BATCH_ID}`);
+  const stages = page.getByRole("group", { name: "处理阶段" });
+  await expect(stages.getByRole("button")).toHaveText([
+    "待爬取0",
+    "爬取中0",
+    "下载中1",
+    "音频分析中1",
+    "视频分析中1",
+    "汇总中0",
+  ]);
+  const results = page.getByRole("group", { name: "处理结果" });
+  await expect(results.getByRole("button")).toHaveText([
+    "已完成0",
+    "失败账号0",
+    "需要重新抓取0",
+    "无法识别0",
+  ]);
+  await expect(page.getByRole("link", { name: "视频达人" })).toBeVisible();
+
+  await stages.getByRole("button", { name: "音频分析中 1" }).click();
+  await expect(page).toHaveURL(/status=audio_analysis/);
+  await expect(page.getByRole("row", { name: /音频达人/ })).toContainText("音频分析中");
+  await expect(page.getByRole("link", { name: "视频达人" })).toHaveCount(0);
+  await page.getByRole("button", { name: "全部达人 3" }).click();
+  await expect(page.getByRole("link", { name: "视频达人" })).toBeVisible();
 });
 
 test("已删除批次的旧链接会回到空工作台", async ({ page }) => {

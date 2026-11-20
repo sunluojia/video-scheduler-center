@@ -5,6 +5,7 @@ from scheduler_center.core.database.mapping import enum_column, mapper_registry,
 from scheduler_center.modules.executor.models import (
     CRAWL_SLOTS,
     DOWNLOAD_SLOTS,
+    WARM_SLOTS,
     Executor,
     ExecutorKind,
 )
@@ -22,6 +23,7 @@ executors = Table(
     Column("identities", JSONB),
     Column("crawl_slots", SmallInteger, nullable=False, server_default=str(CRAWL_SLOTS)),
     Column("download_slots", SmallInteger, nullable=False, server_default=str(DOWNLOAD_SLOTS)),
+    Column("warm_slots", SmallInteger, nullable=False, server_default=str(WARM_SLOTS)),
 )
 
 mapper_registry.map_imperatively(Executor, executors)

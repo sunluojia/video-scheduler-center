@@ -32,6 +32,7 @@ from tests.factories import (
     load,
     messages,
     new_batch,
+    recognized,
     register,
     upload,
     video,
@@ -57,11 +58,93 @@ async def test_batch_is_created_from_links_and_listed_with_progress(client, data
     page = (await client.get("/api/batches", params={"status": "running"})).json()
     assert page["total"] == 1
     assert page["items"][0]["creators"] == {"crawling": 2, "invalid": 1}
+    assert page["items"][0]["creator_progress"] == {"crawling": 2, "invalid": 1}
 
     found = (await client.get(f"/api/batches/{batch['id']}/creators", params={"q": "bo"})).json()
     assert [item["handle"] for item in found["items"]] == ["bob"]
     invalid = await client.get(f"/api/batches/{batch['id']}/creators", params={"status": "invalid"})
     assert invalid.json()["items"][0]["note"] == "名单中的达人名称无法识别为 TikTok 账号"
+
+
+async def test_workbench_uses_the_earliest_incomplete_video_phase_of_the_current_run(
+    client, service, database
+):
+    batch = await new_batch(
+        database, "alice", "private_user", "retry_user", "不是账号!", start=False
+    )
+    alice, private, retry, _ = await creators(database, batch)
+    path = f"/api/batches/{batch.id}"
+
+    async def counts():
+        return (await client.get(path)).json()["creator_progress"]
+
+    async def stage(job_id, name, status, **fields):
+        await analysis_says(
+            database,
+            {
+                "type": "stage",
+                "job_id": job_id,
+                "run": 1,
+                "stage": name,
+                "status": status,
+                "occurred_at": at(2),
+                **fields,
+            },
+        )
+
+    assert await counts() == {"pending": 3, "invalid": 1}
+    assert (await client.post(f"{path}/start")).is_success
+    assert await counts() == {"crawling": 3, "invalid": 1}
+    await crawler_says(
+        database, await crawl_task(database, private), "crawled", conclusion="private"
+    )
+    await crawler_says(
+        database,
+        await crawl_task(database, retry),
+        "crawled",
+        conclusion="failed",
+        reason="读取超时",
+    )
+    outcomes = {"failed": 1, "recrawl": 1, "invalid": 1}
+    await crawl(database, alice, video(1), video(2))
+    first_download, second_download = await messages(database, "download_video")
+    assert (await upload(service, first_download["task_id"], text="one")).is_success
+    [first] = await messages(database, "analyze_video")
+    await stage(first["job_id"], "extract_audio", "succeeded", result={"segment_count": 2})
+    await stage(first["job_id"], "listen", "succeeded", segment=0)
+    assert await counts() == {**outcomes, "downloading": 1}
+
+    assert (await upload(service, second_download["task_id"], text="two")).is_success
+    _, second = await messages(database, "analyze_video")
+    await stage(second["job_id"], "fetch", "succeeded", result={"has_audio": False})
+    assert await counts() == {**outcomes, "audio_analysis": 1}
+    listed = (await client.get(f"{path}/creators", params={"progress": "audio_analysis"})).json()
+    assert [item["id"] for item in listed["items"]] == [str(alice.id)]
+    assert listed["total"] == 1 and listed["items"][0]["progress"] == "audio_analysis"
+    assert (await client.get(f"{path}/creators", params={"progress": "video_analysis"})).json()[
+        "total"
+    ] == 0
+
+    await stage(first["job_id"], "listen", "succeeded", segment=1)
+    assert await counts() == {**outcomes, "video_analysis": 1}
+    for job in (first, second):
+        await stage(job["job_id"], "recognize", "started")
+        await analysis_says(
+            database, job_event(job["job_id"], "completed", seconds=3, result=recognized("穿搭"))
+        )
+    assert await counts() == {**outcomes, "summarizing": 1}
+    [summary] = await messages(database, "summarize_creator")
+    await analysis_says(
+        database,
+        job_event(summary["job_id"], "completed", kind="summary", result={"tags": ["穿搭"]}),
+    )
+    assert await counts() == {**outcomes, "completed": 1}
+
+    first_work, _ = await works(database, alice)
+    assert (await client.post(f"/api/works/{first_work.id}/redownload")).is_success
+    assert await counts() == {**outcomes, "downloading": 1}
+    assert (await upload(service, first_download["task_id"], run=2, text="new one")).is_success
+    assert await counts() == {**outcomes, "audio_analysis": 1}
 
 
 async def test_preview_reports_unrecognized_rows(client):
@@ -149,7 +232,12 @@ async def test_executors_register_and_go_offline(client, service, database):
     body = {"url": CRAWLER_URL, "version": "2.0"}
     reply = await service.put("/api/crawler-services/c1", json=body)
     # 不报身份池的程序不分账号池，并发按默认
-    assert reply.json() == {"identity_target": None, "crawl_slots": 2, "download_slots": 4}
+    assert reply.json() == {
+        "identity_target": None,
+        "crawl_slots": 2,
+        "download_slots": 4,
+        "warm_slots": 1,
+    }
     await register(database, ExecutorKind.ANALYSIS, ANALYSIS_URL, utcnow() - timedelta(minutes=5))
 
     listed = {item["kind"]: item for item in (await client.get("/api/executors")).json()}
@@ -165,17 +253,21 @@ async def test_crawler_slots_set_on_the_page_go_out_with_the_heartbeat(client, s
     body = {"url": CRAWLER_URL, "version": "2.0"}
     await service.put("/api/crawler-services/c1", json=body)
 
-    slots = {"crawl_slots": 4, "download_slots": 6}
-    response = await client.put("/api/executors/crawler/c1/slots", json=slots)
+    path = "/api/executors/crawler/c1/slots"
+    slots = {"crawl_slots": 4, "download_slots": 6, "warm_slots": 3}
+    response = await client.put(path, json=slots)
     assert response.json()["crawl_slots"] == 4
+    assert response.json()["warm_slots"] == 3
     reply = (await service.put("/api/crawler-services/c1", json=body)).json()
-    assert (reply["crawl_slots"], reply["download_slots"]) == (4, 6)
+    assert (reply["crawl_slots"], reply["download_slots"], reply["warm_slots"]) == (4, 6, 3)
 
-    too_many = {"crawl_slots": 99, "download_slots": 6}
-    assert (await client.put("/api/executors/crawler/c1/slots", json=too_many)).status_code == 422
+    for invalid in ({"crawl_slots": 99}, {"warm_slots": 0}, {"warm_slots": 17}):
+        assert (await client.put(path, json={**slots, **invalid})).status_code == 422
+    legacy = await client.put(path, json={"crawl_slots": 2, "download_slots": 5})
+    assert legacy.json()["warm_slots"] == 3
     assert (await client.put("/api/executors/crawler/nobody/slots", json=slots)).status_code == 404
     reply = await service.put("/api/analysis-services/a1", json=body)
-    assert reply.json()["crawl_slots"] is None  # 分析服务不用
+    assert reply.json()["crawl_slots"] is None and reply.json()["warm_slots"] is None
 
 
 async def test_download_progress_collects_online_crawlers_even_if_one_is_older(

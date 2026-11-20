@@ -83,6 +83,21 @@ class CreatorStatus(StrEnum):
     """名单中的达人名称无法识别为账号。"""
 
 
+class CreatorProgress(StrEnum):
+    """批次工作台上每位达人当前所处的阶段。"""
+
+    PENDING = CreatorStatus.PENDING
+    CRAWLING = CreatorStatus.CRAWLING
+    DOWNLOADING = "downloading"
+    AUDIO_ANALYSIS = "audio_analysis"
+    VIDEO_ANALYSIS = "video_analysis"
+    SUMMARIZING = CreatorStatus.SUMMARIZING
+    COMPLETED = CreatorStatus.COMPLETED
+    FAILED = CreatorStatus.FAILED
+    RECRAWL = CreatorStatus.RECRAWL
+    INVALID = CreatorStatus.INVALID
+
+
 CREATOR_FINAL = frozenset(
     {CreatorStatus.COMPLETED, CreatorStatus.FAILED, CreatorStatus.RECRAWL, CreatorStatus.INVALID}
 )

@@ -7,7 +7,7 @@ import { SegmentBar, StatusOf } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { shortTime } from "@/lib/format";
-import { batchStatus, creatorFinal, creatorStatus, ordered, total } from "@/lib/status";
+import { batchStatus, creatorFinal, creatorProgress, ordered, total } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 type BatchRow = Schemas["BatchRow"];
@@ -122,7 +122,7 @@ function BatchItem({ batch }: { batch: BatchRow }) {
   const finished = creatorFinal.reduce((sum, status) => sum + (creators[status] ?? 0), 0);
   const problems = {
     失败账号: creators.failed ?? 0,
-    需重新抓取: creators.recrawl ?? 0,
+    需要重新抓取: creators.recrawl ?? 0,
     失败视频: videos.failed ?? 0,
     待核查视频: videos.needs_review ?? 0,
   };
@@ -144,7 +144,10 @@ function BatchItem({ batch }: { batch: BatchRow }) {
             <StatusOf labels={batchStatus} value={batch.status} />
           </span>
         </div>
-        <SegmentBar segments={ordered(creatorStatus, creators)} />
+        <SegmentBar
+          segments={ordered(creatorProgress, batch.creator_progress)}
+          className="gap-px"
+        />
         <div className="text-muted-foreground flex items-center gap-3 text-[11px]">
           <span className="font-mono">{shortTime(batch.created_at)}</span>
           <span>

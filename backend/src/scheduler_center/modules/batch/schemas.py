@@ -8,6 +8,7 @@ from scheduler_center.core.web.schemas import View
 from scheduler_center.modules.analysis.models import JobKind, JobStatus, StageStatus
 from scheduler_center.modules.batch.models import (
     BatchStatus,
+    CreatorProgress,
     CreatorStatus,
     WorkKind,
     WorkStatus,
@@ -34,6 +35,8 @@ class BatchView(View):
 class BatchRow(BatchView):
     creators: dict[CreatorStatus, int]
     """每种状态的达人数。"""
+    creator_progress: dict[CreatorProgress, int]
+    """工作台上各阶段的达人数。"""
     videos: dict[WorkStatus, int]
     """每种状态的视频数。"""
 
@@ -83,6 +86,7 @@ class WorkView(View):
 
 
 class CreatorRow(CreatorView):
+    progress: CreatorProgress
     works: list[WorkView]
     """锁定的作品，按位置排列。"""
 

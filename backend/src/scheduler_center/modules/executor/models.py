@@ -4,8 +4,8 @@ from enum import StrEnum
 
 from scheduler_center.core.common.clock import utcnow
 
-CRAWL_SLOTS, DOWNLOAD_SLOTS = 2, 4
-"""爬取程序默认的并发：同时获取 2 个达人（各开一个 Chrome 窗口），同时下载 4 条视频。"""
+CRAWL_SLOTS, DOWNLOAD_SLOTS, WARM_SLOTS = 2, 4, 1
+"""爬取程序默认同时采集 2 个达人、下载 4 条视频、预热 1 个身份。"""
 
 
 class ExecutorKind(StrEnum):
@@ -32,6 +32,7 @@ class Executor:
     """爬取程序最近一次心跳带来的身份池快照，账号池页面显示。"""
     crawl_slots: int = CRAWL_SLOTS
     download_slots: int = DOWNLOAD_SLOTS
+    warm_slots: int = WARM_SLOTS
     """爬取程序的并发，执行程序页设置，随心跳回复下发；分析服务不用。"""
 
     def online(self, now: datetime, timeout: timedelta) -> bool:

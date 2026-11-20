@@ -15,7 +15,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { Fragment, type ReactNode, useState } from "react";
+import { Fragment, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { $api, fetchClient, type Schemas } from "@/api/client";
 import { Confirm } from "@/components/confirm";
@@ -40,6 +40,7 @@ import {
   batchStatus,
   creatorFinal,
   creatorFlow,
+  creatorProgress,
   creatorStatus,
   ordered,
   toneClass,
@@ -54,7 +55,14 @@ const PROBLEMS: Schemas["WorkStatus"][] = ["failed", "needs_review"];
 
 type BatchRow = Schemas["BatchRow"];
 type CreatorRow = Schemas["CreatorRow"];
+type CreatorProgress = Schemas["CreatorProgress"];
+type CreatorFilter = CreatorProgress | "analyzing";
 type Filters = ReturnType<typeof useFilters<"status" | "q" | "tab">>;
+
+function creatorFilter(value: string | undefined): CreatorFilter | undefined {
+  if (value === "analyzing") return value;
+  return value && Object.hasOwn(creatorProgress, value) ? (value as CreatorProgress) : undefined;
+}
 
 /** 工作台右侧：选中批次的状态、操作、达人和问题视频。 */
 export function BatchPanel() {
@@ -72,6 +80,7 @@ export function BatchPanel() {
   });
   const filters = useFilters(["status", "q", "tab"] as const);
   const { values, set } = filters;
+  const status = creatorFilter(values.status);
 
   if (data === null) return <Navigate to="/batches" replace />;
 
@@ -82,7 +91,7 @@ export function BatchPanel() {
           <Header batch={data} />
           <StatusStrip
             batch={data}
-            status={values.status}
+            status={status}
             onStatus={(status) => set({ status, tab: undefined })}
           />
           <Tabs
@@ -100,7 +109,7 @@ export function BatchPanel() {
               </TabsTrigger>
             </TabsList>
             <TabsContent value="creators">
-              <Creators batchId={batchId} filters={filters} />
+              <Creators batchId={batchId} status={status} filters={filters} />
             </TabsContent>
             <TabsContent value="problems">
               <Problems batchId={batchId} filters={filters} />
@@ -243,72 +252,71 @@ function StatusStrip({
   onStatus,
 }: {
   batch: BatchRow;
-  status?: string;
-  onStatus: (status?: string) => void;
+  status?: CreatorFilter;
+  onStatus: (status?: CreatorProgress) => void;
 }) {
-  const { creators, videos } = batch;
-  const all = total(creators);
-  const finished = creatorFinal.reduce((sum, key) => sum + (creators[key] ?? 0), 0);
-  const cell = (key: string | undefined, label: string, count: number, extra?: ReactNode) => (
-    <button
-      key={label}
-      type="button"
-      onClick={() => onStatus(status === key ? undefined : key)}
-      aria-pressed={status === key}
-      className={cn(
-        "hover:bg-muted/60 relative flex min-w-0 flex-col gap-0.5 px-3 py-2.5 text-left transition-colors",
-        status === key && "bg-accent/50 hover:bg-accent/50",
-      )}
-    >
-      <span className="text-muted-foreground flex items-center gap-1.5 text-xs whitespace-nowrap">
-        {extra}
-        {label}
-      </span>
-      <span
+  const { creator_progress: progress, videos } = batch;
+  const all = total(progress);
+  const finished = creatorFinal.reduce((sum, key) => sum + (progress[key] ?? 0), 0);
+  const cell = (key: CreatorProgress) => {
+    const [label, tone] = creatorProgress[key];
+    const count = progress[key] ?? 0;
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={() => onStatus(status === key ? undefined : key)}
+        aria-pressed={status === key}
         className={cn(
-          "font-mono text-xl font-semibold tabular-nums",
-          !count && "text-muted-foreground/40",
+          "bg-card hover:bg-muted relative flex min-w-0 flex-col gap-0.5 px-3 py-2.5 text-left transition-colors",
+          status === key && "bg-accent hover:bg-accent",
         )}
       >
-        {count}
-      </span>
-      {status === key && (
-        <span className="bg-signal absolute inset-x-3 bottom-0 h-0.5 rounded-full" />
-      )}
-    </button>
-  );
-  const dot = (key: Schemas["CreatorStatus"]) => (
-    <span className={cn("size-1.5 rounded-full", toneClass[creatorStatus[key][1]].dot)} />
-  );
+        <span className="text-muted-foreground flex items-center gap-1.5 text-xs whitespace-nowrap">
+          <span className={cn("size-1.5 rounded-full", toneClass[tone].dot)} />
+          {label}
+        </span>
+        <span
+          className={cn(
+            "font-mono text-xl font-semibold tabular-nums",
+            !count && "text-muted-foreground/40",
+          )}
+        >
+          {count}
+        </span>
+        {status === key && (
+          <span className="bg-signal absolute inset-x-3 bottom-0 h-0.5 rounded-full" />
+        )}
+      </button>
+    );
+  };
 
   return (
     <Panel className="rise overflow-hidden">
-      <div className="grid grid-cols-3 sm:grid-cols-5 xl:grid-cols-[1.1fr_repeat(4,1fr)_repeat(4,1fr)]">
-        {cell(undefined, "全部达人", all)}
-        {creatorFlow.map((key, index) => (
-          <div key={key} className="relative border-l">
-            {cell(key, creatorStatus[key][0], creators[key] ?? 0, dot(key))}
-            {index < creatorFlow.length - 1 && (
-              <ChevronRight className="bg-card text-muted-foreground/50 absolute top-1/2 -right-2 z-10 size-4 -translate-y-1/2 rounded-full" />
-            )}
-          </div>
-        ))}
-        {creatorFinal.map((key, index) => (
-          <div
-            key={key}
-            className={cn("border-l", index === 0 && "xl:border-l-foreground/15 xl:border-l-2")}
-          >
-            {cell(key, creatorStatus[key][0], creators[key] ?? 0, dot(key))}
-          </div>
-        ))}
+      <div
+        role="group"
+        aria-label="处理阶段"
+        className="bg-border grid grid-cols-2 gap-px md:grid-cols-3 2xl:grid-cols-6"
+      >
+        {creatorFlow.map(cell)}
+      </div>
+      <div
+        role="group"
+        aria-label="处理结果"
+        className="bg-border grid grid-cols-2 gap-px border-t md:grid-cols-4"
+      >
+        {creatorFinal.map(cell)}
       </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t px-3 py-2 text-xs">
+        <Button size="xs" variant="outline" aria-pressed={!status} onClick={() => onStatus()}>
+          全部达人 <Count value={all} />
+        </Button>
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">达人已结束</span>
           <span className="font-mono">
             {finished}/{all}
           </span>
-          <SegmentBar segments={ordered(creatorStatus, creators)} className="w-40" />
+          <SegmentBar segments={ordered(creatorProgress, progress)} className="w-40 gap-px" />
           <span className="text-muted-foreground font-mono">
             {all ? Math.round((finished / all) * 100) : 0}%
           </span>
@@ -323,7 +331,15 @@ function StatusStrip({
 }
 
 /** 达人表：每行带五个作品格，点开直接看每条作品的状态、标签和失败原因。 */
-function Creators({ batchId, filters }: { batchId: string; filters: Filters }) {
+function Creators({
+  batchId,
+  status,
+  filters,
+}: {
+  batchId: string;
+  status?: CreatorFilter;
+  filters: Filters;
+}) {
   const { values, page, set } = filters;
   const [expandAll, setExpandAll] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -331,7 +347,8 @@ function Creators({ batchId, filters }: { batchId: string; filters: Filters }) {
     params: {
       path: { batch_id: batchId },
       query: {
-        status: values.status as Schemas["CreatorStatus"] | undefined,
+        status: status === "analyzing" ? status : undefined,
+        progress: status === "analyzing" ? undefined : status,
         q: values.q,
         page,
         size: SIZE,
@@ -357,9 +374,9 @@ function Creators({ batchId, filters }: { batchId: string; filters: Filters }) {
             }
           />
         </div>
-        {values.status && (
+        {status && (
           <Button variant="secondary" size="xs" onClick={() => set({ status: undefined })}>
-            {creatorStatus[values.status as Schemas["CreatorStatus"]]?.[0]} <X />
+            {status === "analyzing" ? creatorStatus.analyzing[0] : creatorProgress[status][0]} <X />
           </Button>
         )}
         <Button
@@ -435,7 +452,7 @@ function Creators({ batchId, filters }: { batchId: string; filters: Filters }) {
                         </div>
                       </TableCell>
                       <TableCell className="py-1.5">
-                        <StatusOf labels={creatorStatus} value={creator.status} />
+                        <StatusOf labels={creatorProgress} value={creator.progress} />
                       </TableCell>
                       <TableCell className="py-1.5">
                         <WorkSlots works={creator.works} />

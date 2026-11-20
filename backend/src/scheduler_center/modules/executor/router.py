@@ -79,6 +79,7 @@ class ExecutorView(BaseModel):
     online: bool
     crawl_slots: int
     download_slots: int
+    warm_slots: int
 
     @classmethod
     def of(cls, item: Executor, now: datetime, timeout: timedelta) -> Self:
@@ -93,6 +94,7 @@ class ExecutorView(BaseModel):
             online=item.online(now, timeout),
             crawl_slots=item.crawl_slots,
             download_slots=item.download_slots,
+            warm_slots=item.warm_slots,
         )
 
 
@@ -101,6 +103,8 @@ class Slots(BaseModel):
     """同时获取几个达人，每个开一个 Chrome 窗口（约 400 MB）。"""
     download_slots: int = Field(ge=1, le=32)
     """同时下载几条视频。"""
+    warm_slots: int | None = Field(default=None, ge=1, le=16)
+    """同时预热几个身份。省略时保留当前设置。"""
 
 
 class RegistrationReply(BaseModel):
@@ -109,6 +113,7 @@ class RegistrationReply(BaseModel):
     分析服务和不报身份池的程序没有。"""
     crawl_slots: int | None = None
     download_slots: int | None = None
+    warm_slots: int | None = None
     """爬取程序的并发，执行程序页设置；分析服务没有。"""
 
 
@@ -156,6 +161,7 @@ async def register(
             ),
             crawl_slots=item.crawl_slots,
             download_slots=item.download_slots,
+            warm_slots=item.warm_slots,
         )
 
 
@@ -214,6 +220,8 @@ async def set_slots(
         repo = ExecutorRepository(session)
         item = await repo.require(Executor, (ExecutorKind.CRAWLER, instance_id), lock=True)
         item.crawl_slots, item.download_slots = body.crawl_slots, body.download_slots
+        if body.warm_slots is not None:
+            item.warm_slots = body.warm_slots
     return ExecutorView.of(item, utcnow(), _heartbeat_timeout(request))
 
 
