@@ -1,0 +1,114 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/archivo";
+@import "@fontsource-variable/jetbrains-mono";
+
+/*
+ * 控制室风格：深石墨侧栏 + 暖纸色工作区，信号橙只用于需要注意和可操作的地方。
+ * 状态颜色统一在 --status-* 中定义，页面上所有状态标记共用。
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.375rem;
+  --background: oklch(0.968 0.006 85);
+  --foreground: oklch(0.2 0.008 260);
+  --card: oklch(0.995 0.002 85);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.24 0.01 260);
+  --primary-foreground: oklch(0.98 0.004 85);
+  --secondary: oklch(0.93 0.008 85);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.935 0.007 85);
+  --muted-foreground: oklch(0.5 0.012 260);
+  --accent: oklch(0.92 0.02 60);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.56 0.2 27);
+  --border: oklch(0.88 0.01 85);
+  --input: oklch(0.86 0.01 85);
+  --ring: oklch(0.68 0.18 45);
+  --signal: oklch(0.68 0.19 45);
+  --signal-foreground: oklch(0.99 0 0);
+  --sidebar: oklch(0.21 0.008 260);
+  --sidebar-foreground: oklch(0.82 0.008 85);
+  --sidebar-muted: oklch(0.6 0.01 260);
+  --sidebar-border: oklch(0.29 0.008 260);
+
+  --status-idle: oklch(0.62 0.01 260);
+  --status-active: oklch(0.55 0.15 250);
+  --status-done: oklch(0.55 0.13 155);
+  --status-attention: oklch(0.7 0.16 70);
+  --status-failed: oklch(0.56 0.2 27);
+  --status-muted: oklch(0.72 0.01 85);
+}
+
+@theme inline {
+  --font-sans:
+    "Archivo Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Mono", monospace;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-signal: var(--signal);
+  --color-signal-foreground: var(--signal-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-status-idle: var(--status-idle);
+  --color-status-active: var(--status-active);
+  --color-status-done: var(--status-done);
+  --color-status-attention: var(--status-attention);
+  --color-status-failed: var(--status-failed);
+  --color-status-muted: var(--status-muted);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "tnum";
+  }
+  /* 工作区的细网格底纹，像图纸一样帮助对齐视线 */
+  .workspace {
+    background-image:
+      linear-gradient(to right, oklch(0.2 0.01 260 / 0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0.2 0.01 260 / 0.035) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+}
+
+@utility rise {
+  animation: rise 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}

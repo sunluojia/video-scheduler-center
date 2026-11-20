@@ -1,0 +1,87 @@
+name: video-scheduler-center
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: deployment/Dockerfile
+  env_file:
+    - path: ../.env
+      required: false
+  # 容器内的地址和路径固定，优先于 .env 中给本机开发用的值。
+  environment:
+    SC_DATABASE_URL: postgresql+asyncpg://scheduler:scheduler@postgres:5432/scheduler_center
+    SC_REDIS_URL: redis://redis:6379/0
+    SC_API_HOST: 0.0.0.0
+    SC_MATERIAL_ROOT: /data/materials
+  volumes:
+    # 爬取程序上传的原视频，API 与 Worker 共享。
+    - materials:/data/materials
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: scheduler
+      POSTGRES_DB: scheduler_center
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler -d scheduler_center"]
+      interval: 5s
+      retries: 10
+
+  # 爬取程序和分析服务经局域网连接这个 Redis；开启持久化，重启不丢任务。
+  redis:
+    image: redis:8
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  migrate:
+    <<: *app
+    command: alembic upgrade head
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: scheduler-center-api
+    # 页面和执行程序都经这个端口访问。
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    command: scheduler-center-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  consumer:
+    <<: *app
+    command: dramatiq scheduler_center.entrypoints.consumer:broker --processes 1 --threads 4
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  redis:
+  materials:

@@ -1,0 +1,50 @@
+[project]
+name = "scheduler-center"
+version = "0.1.0"
+description = "调度中心：批次与达人名单、爬取和分析任务的编排、结果导出"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.20.1",
+    "anyio>=4.16.0",
+    "asyncpg>=0.32.0",
+    "dramatiq[redis]>=2.2.1",
+    "fastapi>=0.163.1",
+    "httpx>=0.28.1",
+    "openpyxl>=3.1.5",
+    "pillow>=13.0.0",
+    "pydantic-settings>=2.16.3",
+    "python-multipart>=0.0.34",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+# 事件接收进程用 Dramatiq 命令行启动：dramatiq scheduler_center.entrypoints.consumer:broker
+scheduler-center-api = "scheduler_center.entrypoints.api:main"
+scheduler-center-worker = "scheduler_center.entrypoints.worker:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.5",
+    "socksio>=1.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# 中文注释和文案里的全角标点是正常写法。
+ignore = ["RUF001", "RUF002", "RUF003"]

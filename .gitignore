@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+/data/
+backend/data/
+logs/
+
+# 本机审计与联调记录
+/docs/code-audit-2026-11-18.md
+/docs/download-proxy-audit-2026-11-18.md
