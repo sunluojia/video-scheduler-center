@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.modules.executor.models import ExecutorKind
+from scheduler_center.modules.proxy.dispatcher import Dispatcher
 from scheduler_center.modules.proxy.models import (
     CheckResult,
     Lease,
@@ -262,6 +263,93 @@ async def test_rotation_starts_after_the_last_line(client, service, database):
         await give_back(service, reply)
 
     assert seen == ["203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.1"]
+
+
+async def test_selected_sources_use_priority_and_share_capacity_per_exit(client, service, database):
+    first = await folder(client, "主力")
+    child = await folder(client, "主力子组", first)
+    backup = await folder(client, "备用")
+    await add(client, "10.0.0.1:80", folder_id=child)
+    await add(client, "10.0.0.2:80\n10.0.0.3:80", folder_id=backup)
+    ids = await add(client, "10.0.0.4:80\n10.0.0.5:80")
+    await passed(
+        database,
+        {
+            "10.0.0.1": "203.0.113.1",
+            "10.0.0.2": "203.0.113.1",
+            "10.0.0.3": "203.0.113.3",
+            "10.0.0.4": "203.0.113.4",
+            "10.0.0.5": "203.0.113.5",
+        },
+    )
+    targets = [
+        {"kind": "folder", "id": backup, "priority": 3},
+        {"kind": "folder", "id": first, "priority": 1},
+        {"kind": "proxy", "id": ids["10.0.0.4"], "priority": 2},
+    ]
+    await use_pool(client, targets=targets, line_limit=1)
+    configured = (await card(client))["rule"]["targets"]
+    assert [item["label"] for item in configured] == ["备用", "主力", "10.0.0.4:80"]
+    replies = [await lease(service, device) for device in ("a", "b", "c", "d")]
+    assert [line_of(reply) for reply in replies] == [
+        "203.0.113.1",
+        "203.0.113.4",
+        "203.0.113.3",
+        None,
+    ]
+    assert replies[0]["lease"]["route"]["host"] == "10.0.0.1"
+
+
+async def test_weight_is_shared_by_free_lines_in_each_source(
+    client, service, database, monkeypatch
+):
+    first = await folder(client, "主力")
+    child = await folder(client, "子组", first)
+    await add(client, "10.0.0.1:80\n10.0.0.2:80", folder_id=first)
+    ids = await add(client, "10.0.0.3:80\n10.0.0.4:80", folder_id=child)
+    await passed(database, {f"10.0.0.{n}": f"203.0.113.{n}" for n in range(1, 5)})
+    targets = [
+        {"kind": "folder", "id": first, "weight": 6},
+        {"kind": "folder", "id": child, "weight": 2},
+        {"kind": "proxy", "id": ids["10.0.0.4"], "weight": 1},
+    ]
+    await use_pool(client, targets=targets, mode="weighted", line_limit=1)
+    calls = []
+
+    def choose(keys, weights, *, k):
+        assert k == 1
+        calls.append(dict(zip(keys, weights, strict=True)))
+        return ["203.0.113.1"] if "203.0.113.1" in keys else ["203.0.113.2"]
+
+    monkeypatch.setattr("scheduler_center.modules.proxy.dispatcher.choices", choose)
+    assert line_of(await lease(service)) == "203.0.113.1"
+    assert line_of(await lease(service)) == "203.0.113.2"
+    assert calls == [
+        {"203.0.113.1": 3, "203.0.113.2": 3, "203.0.113.3": 2, "203.0.113.4": 1},
+        {"203.0.113.2": 6, "203.0.113.3": 2, "203.0.113.4": 1},
+    ]
+
+
+async def test_device_targets_stay_restricted_when_a_selected_folder_is_deleted(
+    client, service, database
+):
+    selected = await folder(client, "专用")
+    await add(client, "10.0.0.1:80", folder_id=selected)
+    await add(client, "10.0.0.2:80")
+    await passed(database, {"10.0.0.1": "203.0.113.1", "10.0.0.2": "203.0.113.2"})
+    await use_pool(client)
+    path = f"/api/proxy-uses/{DOWNLOAD}/devices/other"
+    targets = [{"kind": "folder", "id": selected}]
+    response = await client.put(path, json={"source": "pool", "targets": targets})
+    assert response.is_success
+    assert line_of(await lease(service, "other")) == "203.0.113.1"
+    assert (await client.delete(f"/api/proxy-folders/{selected}")).status_code == 204
+    waiting = await lease(service, "other")
+    assert (waiting["lease"], waiting["reason"]) == (None, "规则里没有可用的代理")
+    assert (await client.put(path, json={"source": "pool", "targets": targets})).status_code == 422
+    assert (
+        await client.put(path, json={"source": "pool", "targets": targets * 2})
+    ).status_code == 422
 
 
 async def test_retries_avoid_failed_lines_unless_none_is_left(client, service, database):
@@ -567,6 +655,82 @@ def ok(proxy_id: str, exit_ip: str) -> httpx.Response:
     return httpx.Response(200, json=[{"key": proxy_id, "result": "ok", "exit_ip": exit_ip}])
 
 
+async def test_an_online_pool_can_add_and_switch_proxies_with_active_leases(
+    client, service, database, database_url, tmp_path, executors
+):
+    await lines(client, database, 1)
+    await use_pool(client, line_limit=1)
+    held = await lease(service)
+    assert line_of(held) == "203.0.113.1"
+
+    new = await client.post(
+        "/api/proxies", json={"host": "10.0.0.2", "port": 80, "uses": [DOWNLOAD]}
+    )
+    assert new.status_code == 201
+    proxy_id = new.json()["id"]
+    assert (await lease(service))["lease"] is None  # 新代理测试通过之前不能分配
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL)
+    worker = build_worker(database, database_url, tmp_path, executors)
+    executors.responses["POST", "/api/proxy-tests"] = ok(proxy_id, "203.0.113.2")
+    assert await worker.proxies.test_due() == 1
+    assert line_of(await lease(service)) == "203.0.113.2"
+
+    await use_pool(client, line_limit=2, targets=[{"kind": "proxy", "id": proxy_id}])
+    await give_back(service, held)
+    assert line_of(await lease(service)) == "203.0.113.2"
+
+
+async def test_old_leases_do_not_override_a_proxy_credential_update(
+    client, service, database, database_url, tmp_path, executors
+):
+    proxy_id = (await add(client, "10.0.0.1:80:alice:old"))["10.0.0.1"]
+    await passed(database, {"10.0.0.1": "203.0.113.1"})
+    await use_pool(client, line_limit=2)
+    first, second = await lease(service), await lease(service)
+
+    edited = await client.patch(f"/api/proxies/{proxy_id}", json={"password": "new"})
+    assert edited.json()["status"] == "untested"
+    await give_back(service, first, "auth_failed")
+    waiting = await load(database, Proxy, UUID(proxy_id))
+    assert waiting.status == ProxyStatus.UNTESTED and waiting.test_at is not None
+
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL)
+    worker = build_worker(database, database_url, tmp_path, executors)
+    executors.responses["POST", "/api/proxy-tests"] = ok(proxy_id, "203.0.113.1")
+    assert await worker.proxies.test_due() == 1
+    assert (await lease(service))["lease"]["route"]["password"] == "new"
+
+    await give_back(service, second, "proxy_down")
+    assert (await load(database, Proxy, UUID(proxy_id))).status == ProxyStatus.AVAILABLE
+    assert line_of(await lease(service)) == "203.0.113.1"
+
+
+async def test_a_pending_lease_does_not_take_a_proxy_disabled_during_selection(
+    client, service, database, monkeypatch
+):
+    proxy_id = (await lines(client, database, 1))["10.0.0.1"]
+    await use_pool(client)
+    selected, resume = asyncio.Event(), asyncio.Event()
+    original = Dispatcher.candidates
+
+    async def read_candidates(dispatcher, *args):
+        result = await original(dispatcher, *args)
+        selected.set()
+        await resume.wait()
+        return result
+
+    monkeypatch.setattr(Dispatcher, "candidates", read_candidates)
+    pending = asyncio.create_task(lease(service))
+    try:
+        await asyncio.wait_for(selected.wait(), 3)
+        disabled = await client.post("/api/proxies/disable", json={"ids": [proxy_id]})
+        assert disabled.json() == {"count": 1}
+    finally:
+        resume.set()
+        reply = await pending
+    assert reply["lease"] is None
+
+
 async def test_a_late_result_for_the_old_address_is_ignored(
     client, database, database_url, tmp_path, executors, monkeypatch
 ):
@@ -700,12 +864,49 @@ async def test_a_dynamic_proxy_refreshes_only_after_its_leases_return(
     assert (await lease(service))["reason"] == "规则里没有可用的代理"
     assert await worker.proxies.test_due() == 0  # 先排空
 
-    await give_back(service, held)
+    await give_back(service, held, "auth_failed")  # 旧连接失败不能撤销已安排的刷新
     reply = [{"key": proxy["id"], "result": "ok", "exit_ip": "203.0.113.2"}]
     executors.responses[("POST", "/api/proxy-tests")] = httpx.Response(200, json=reply)
     assert await worker.proxies.test_due() == 1
     sent = json.loads(executors.requests[-1].content)
     assert sent["items"][0]["refresh_url"] == "https://vendor.test/refresh?key=k"
+    assert line_of(await lease(service)) == "203.0.113.2"
+
+
+async def test_a_running_connectivity_test_does_not_cancel_a_new_exit_refresh(
+    client, service, database, database_url, tmp_path, executors, monkeypatch
+):
+    body = {
+        "host": "10.0.0.1",
+        "port": 80,
+        "refresh_url": "https://vendor.test/refresh",
+        "uses": [DOWNLOAD],
+    }
+    proxy_id = (await client.post("/api/proxies", json=body)).json()["id"]
+    await passed(database, {"10.0.0.1": "203.0.113.1"})
+    await use_pool(client)
+    held = await lease(service)
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL)
+    worker = build_worker(database, database_url, tmp_path, executors)
+    tested = worker.proxies._run
+    ids = {"ids": [proxy_id]}
+
+    async def refreshed_meanwhile(device, items):
+        result = await tested(device, items)
+        assert (await client.post("/api/proxies/refresh", json=ids)).is_success
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(worker.proxies, "_run", refreshed_meanwhile)
+        executors.responses["POST", "/api/proxy-tests"] = ok(proxy_id, "203.0.113.1")
+        assert (await client.post("/api/proxies/test", json=ids)).is_success
+        assert await worker.proxies.test_due() == 1
+
+    assert (await load(database, Proxy, UUID(proxy_id))).status == ProxyStatus.REFRESHING
+    assert await worker.proxies.test_due() == 0
+    await give_back(service, held)
+    executors.responses["POST", "/api/proxy-tests"] = ok(proxy_id, "203.0.113.2")
+    assert await worker.proxies.test_due() == 1
     assert line_of(await lease(service)) == "203.0.113.2"
 
 

@@ -100,3 +100,75 @@ test("在页面上改爬取程序的并发", async ({ page }) => {
   expect((await sent).postDataJSON()).toEqual({ crawl_slots: 4, download_slots: 4 });
   await expect(page.getByText("crawler-1 下一次心跳（15 秒内）按新的并发运行")).toBeVisible();
 });
+
+test("从执行程序直接修改模型请求并发", async ({ page }) => {
+  const now = new Date().toISOString();
+  const executor = {
+    kind: "analysis",
+    instance_id: "analysis-1",
+    url: "http://analysis.test",
+    version: "1.0",
+    online: true,
+    registered_at: now,
+    last_seen_at: now,
+    withdrawn_at: null,
+  };
+  const provider = { id: "provider-1", name: "测试供应商", provider: "openai" };
+  const model = {
+    id: "test-model",
+    provider_id: provider.id,
+    name: "vision-model",
+    max_concurrency: 4,
+    requests_per_minute: 60,
+    timeout_seconds: 240,
+    params: { temperature: 0 },
+  };
+  await mockApi(page, {
+    "GET /api/executors": [executor],
+    "GET /api/executors/analysis/status": {
+      jobs: {},
+      running: {},
+      ready: {},
+      models: [],
+      free_disk_bytes: 0,
+    },
+    "GET /api/executors/crawler/status": {
+      crawl: { running: 0, queued: 0 },
+      download: { running: 0, queued: 0 },
+      identities: null,
+      leases: 0,
+      paused_batches: [],
+    },
+    "GET /api/ai/models": [model],
+    "GET /api/ai/providers": [provider],
+    "PUT /api/ai/models/test-model": { ...model, max_concurrency: 8 },
+    "GET /api/identities": { target: 8, devices: [], alerts: [] },
+    "GET /api/proxy-alerts": [],
+  });
+
+  await page.goto("/executors");
+  await page.getByText("分析 Worker 的部署并发设置", { exact: true }).click();
+  await expect(page.getByText("VA_THREAD_POOL_SIZE", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "设置模型并发" }).click();
+  await expect(page.getByRole("tab", { name: "模型", exact: true })).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  const row = page.getByRole("row", { name: /vision-model/ });
+  await row.getByRole("button", { name: "编辑" }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑模型" });
+  await dialog.getByRole("spinbutton", { name: "请求并发上限" }).fill("8");
+  const sent = page.waitForRequest(
+    (request) => request.method() === "PUT" && request.url().endsWith("/api/ai/models/test-model"),
+  );
+  await dialog.getByRole("button", { name: "保存" }).click();
+  expect((await sent).postDataJSON()).toEqual({
+    provider_id: provider.id,
+    name: model.name,
+    max_concurrency: 8,
+    requests_per_minute: 60,
+    timeout_seconds: 240,
+    params: { temperature: 0 },
+  });
+  await expect(dialog).toBeHidden();
+});

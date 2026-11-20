@@ -81,6 +81,7 @@ proxies = Table(
     Column("speed_tested_at", timestamp()),
     Column("speed_error", Text),
     Column("created_at", timestamp(), nullable=False),
+    Column("config_revision", Uuid),
     UniqueConstraint("host", "port", "username"),
 )
 
@@ -96,6 +97,7 @@ proxy_rules = Table(
     Column("line_limit", Integer, nullable=False),
     Column("cursor", String(160)),
     Column("updated_at", timestamp(), nullable=False),
+    Column("targets", JSONB(none_as_null=True)),
 )
 
 proxy_lines = Table(
@@ -130,6 +132,7 @@ proxy_leases = Table(
     Column("released_at", timestamp()),
     Column("outcome", enum_column(Outcome)),
     Column("detail", Text),
+    Column("proxy_revision", Uuid),
     Index("ix_proxy_leases_open", "use", "line", postgresql_where=text("released_at IS NULL")),
 )
 """租约同时是线路表现的记录，保留 24 小时；代理删除后记录照常保留。"""

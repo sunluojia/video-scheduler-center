@@ -23,6 +23,7 @@ it.each([0, 1])("旧端口只有在任务进行中时才显示（使用中 %i）
     local_port: null,
     mode: "priority",
     line_limit: 2,
+    targets: null,
     updated_at: "2026-01-01T00:00:00Z",
   };
   const pool: UseCard["lines"][number] = {

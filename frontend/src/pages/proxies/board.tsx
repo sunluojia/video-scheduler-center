@@ -1,8 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { FlaskConical, Settings2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 import { $api, type Schemas } from "@/api/client";
+import { DownloadProgress } from "@/components/download-progress";
 import { Field } from "@/components/field";
 import { Panel, QueryState } from "@/components/page";
 import { Status } from "@/components/status";
@@ -29,8 +31,9 @@ import { useFilters } from "@/lib/params";
 import { useDone } from "@/lib/refresh";
 import { lineState, pickModes, ruleSources, toneClass } from "@/lib/status";
 import { cn } from "@/lib/utils";
-import { type UseCard, useFolders, useUses } from "./data";
-import { FolderSelect, Recent, Segmented } from "./shared";
+import { ruleTargets, targetsBody, type UseCard, useFolders, useUses } from "./data";
+import { Recent, Segmented } from "./shared";
+import { PoolTargets } from "./targets";
 
 type Line = Schemas["LineView"];
 type Rule = Schemas["RuleView"];
@@ -78,7 +81,7 @@ function Card({ use }: { use: UseCard }) {
       <p className="text-sm">
         {describe(use.rule, true)}
         {use.rule.source === "pool" && (
-          <span className="text-muted-foreground"> · 能用的代理 {use.proxies} 个</span>
+          <span className="text-muted-foreground"> · 池内符合用途的代理 {use.proxies} 个</span>
         )}
       </p>
       <Lines lines={lines} onPick={(key) => set({ line: key })} />
@@ -107,6 +110,11 @@ function Card({ use }: { use: UseCard }) {
             .join("；")}
         </p>
       )}
+      {use.key === "crawler.download_video" && (
+        <div className="border-t pt-3">
+          <DownloadProgress />
+        </div>
+      )}
     </Panel>
   );
 }
@@ -119,9 +127,20 @@ function useDescribe() {
   return (rule: Rule, cluster: boolean) => {
     if (rule.source === "direct") return cluster ? "直连：用各设备自己的网络" : "直连";
     if (rule.source === "local_port") return `本机端口 ${rule.local_port}`;
-    const scope = folders.find((folder) => folder.id === rule.folder_id)?.name ?? "整个代理池";
+    const targets = ruleTargets(rule);
+    const scope =
+      targets === null
+        ? "整个代理池"
+        : targets
+            .map(
+              (target) =>
+                target.label ??
+                folders.find((folder) => folder.id === target.id)?.name ??
+                "已删除项",
+            )
+            .join("、") || "范围为空";
     return cluster
-      ? `走代理池（${scope}）· ${pickModes[rule.mode]} · 每条线路同时 ${rule.line_limit} 个`
+      ? `代理池（${scope}）· ${pickModes[rule.mode]} · 每条线路最多同时 ${rule.line_limit} 个任务`
       : `代理池（${scope}）`;
   };
 }
@@ -195,7 +214,7 @@ function UseSettings({ use }: { use: UseCard }) {
             {use.service_name} · {use.name}
           </SheetTitle>
           <SheetDescription>
-            哪些代理能用于“{use.name}”，在代理池里给代理打用途标签决定；这里设置怎么走和用多少。
+            为「{use.name}」选择线路来源。代理需要带有对应的用途标签并通过测试。
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-8 px-4 pb-8">
@@ -204,13 +223,14 @@ function UseSettings({ use }: { use: UseCard }) {
             <div>
               <h3 className="text-sm font-semibold">设备例外</h3>
               <p className="text-muted-foreground text-xs">
-                没设例外的设备跟随上面的设置；单台设备可以直连、用它本机的代理端口，或只用某个文件夹里的代理。
+                设备可指定自己的线路来源和代理范围，调度方式及并发上限沿用集群设置。
               </p>
             </div>
             {use.devices.map((device) => (
               <DeviceException
                 key={`${device.instance_id}-${device.rule?.updated_at}`}
                 use={use.key}
+                mode={use.rule.mode}
                 device={device}
               />
             ))}
@@ -226,7 +246,7 @@ function UseSettings({ use }: { use: UseCard }) {
 
 function ClusterForm({ use }: { use: UseCard }) {
   const [source, setSource] = useState(use.rule.source);
-  const [folder, setFolder] = useState(use.rule.folder_id);
+  const [targets, setTargets] = useState(() => ruleTargets(use.rule));
   const [mode, setMode] = useState(use.rule.mode);
   const [limit, setLimit] = useState(String(use.rule.line_limit));
   const done = useDone();
@@ -234,8 +254,27 @@ function ClusterForm({ use }: { use: UseCard }) {
     onSuccess: () => done(`已保存“${use.name}”的设置，之后的申请按新设置分配`),
   });
   const pool = source === "pool";
+  const modes: [Rule["mode"], string][] = [
+    ["priority", pickModes.priority],
+    ["weighted", pickModes.weighted],
+  ];
+  if (use.rule.mode === "rotate") modes.push(["rotate", pickModes.rotate]);
   return (
-    <section className="space-y-4">
+    <form
+      className="space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save.mutate({
+          params: { path: { use: use.key } },
+          body: {
+            source,
+            targets: pool ? targetsBody(targets) : null,
+            mode,
+            line_limit: Number(limit),
+          },
+        });
+      }}
+    >
       <Option label="怎么走">
         <Segmented
           value={source}
@@ -246,52 +285,48 @@ function ClusterForm({ use }: { use: UseCard }) {
           onChange={setSource}
         />
       </Option>
-      <p className="text-muted-foreground text-xs">
-        {pool
-          ? `用代理池里带“${use.name}”用途的代理，不回落直连；出口相同的代理算一条线路。`
-          : "不走代理，用各设备自己的网络出口。"}
-      </p>
       {pool && (
         <>
-          <Field label="范围">
-            <FolderSelect value={folder} onChange={setFolder} none="整个代理池" label="范围" />
-          </Field>
-          <Option label="先用哪条">
-            <Segmented
-              value={mode}
-              options={Object.entries(pickModes) as [Rule["mode"], string][]}
-              onChange={setMode}
-            />
+          <Option label="调度方式">
+            <Segmented value={mode} options={modes} onChange={setMode} />
           </Option>
           <p className="text-muted-foreground text-xs">
             {mode === "priority"
-              ? "按文件夹的先后顺序：前面文件夹的线路满了或在冷却，才用后面的。拖动左侧的文件夹调整顺序。"
-              : "所有线路轮流用，整个集群共用一个轮询位置。"}
+              ? "数值越小越先用，线路满了或在冷却就用下一档。同级按代理池顺序。"
+              : mode === "weighted"
+                ? "在有空位的选项间按权重分配，例如 3 和 1 约为 75% 和 25%。整个代理池按出口等权。"
+                : "沿用现有的按线路轮询设置。"}
           </p>
+          <PoolTargets use={use.key} mode={mode} targets={targets} onChange={setTargets} />
         </>
       )}
-      <Field label="每条线路同时使用" hint="整个集群合计；同一出口同时用得太多容易被限流">
+      <Field
+        label="每条线路的并发上限"
+        hint={
+          pool
+            ? `「${use.name}」的代理线路由所有设备共享。相同 IPv4 出口或 IPv6 /64 网段算一路，填 2 表示每路最多同时跑 2 个任务。直连和本机端口按设备各算。`
+            : "直连时每台设备各算一路。填 2，表示这台设备最多用直连同时跑 2 个这类任务。"
+        }
+      >
         <Input
           type="number"
           min={1}
           max={20}
+          required
           className="w-28 font-mono"
           value={limit}
           onChange={(event) => setLimit(event.target.value)}
         />
       </Field>
-      <Button
-        disabled={save.isPending}
-        onClick={() =>
-          save.mutate({
-            params: { path: { use: use.key } },
-            body: { source, folder_id: pool ? folder : null, mode, line_limit: Number(limit) },
-          })
-        }
-      >
-        保存
-      </Button>
-    </section>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={save.isPending}>
+          保存
+        </Button>
+        <Button asChild variant="link" size="sm">
+          <Link to="/executors">设置设备采集／下载并发</Link>
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -304,9 +339,17 @@ function Option({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function DeviceException({ use, device }: { use: Schemas["Use"]; device: Device }) {
+function DeviceException({
+  use,
+  mode,
+  device,
+}: {
+  use: Schemas["Use"];
+  mode: Rule["mode"];
+  device: Device;
+}) {
   const [choice, setChoice] = useState<Choice>(device.rule?.source ?? "follow");
-  const [folder, setFolder] = useState(device.rule?.folder_id ?? null);
+  const [targets, setTargets] = useState(() => ruleTargets(device.rule));
   const [port, setPort] = useState(String(device.rule?.local_port ?? ""));
   const done = useDone();
   const queryClient = useQueryClient();
@@ -331,13 +374,19 @@ function DeviceException({ use, device }: { use: Schemas["Use"]; device: Device 
           ...path,
           body: {
             source: choice,
-            folder_id: choice === "pool" ? folder : null,
+            targets: choice === "pool" ? targetsBody(targets) : null,
             local_port: choice === "local_port" ? Number(port) || null : null,
           },
         });
   const line = device.line;
   return (
-    <div className="space-y-2 rounded-md border p-3">
+    <form
+      className="space-y-2 rounded-md border p-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
       <div className="flex items-center gap-3">
         <span className="font-mono text-xs">{device.instance_id}</span>
         <Status
@@ -360,16 +409,12 @@ function DeviceException({ use, device }: { use: Schemas["Use"]; device: Device 
             ))}
           </SelectContent>
         </Select>
-        {choice === "pool" && (
-          <div className="w-48">
-            <FolderSelect value={folder} onChange={setFolder} none="整个代理池" label="范围" />
-          </div>
-        )}
         {choice === "local_port" && (
           <Input
             type="number"
             min={1}
             max={65535}
+            required
             placeholder="端口，如 7890"
             aria-label="本机端口"
             className="h-8 w-32 font-mono"
@@ -377,11 +422,22 @@ function DeviceException({ use, device }: { use: Schemas["Use"]; device: Device 
             onChange={(event) => setPort(event.target.value)}
           />
         )}
-        <Button size="sm" variant="outline" onClick={submit}>
+      </div>
+      {choice === "pool" && (
+        <PoolTargets use={use} mode={mode} targets={targets} onChange={setTargets} />
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="submit"
+          size="sm"
+          variant="outline"
+          disabled={save.isPending || clear.isPending}
+        >
           保存
         </Button>
         {device.rule?.source === "local_port" && (
           <Button
+            type="button"
             size="sm"
             variant="ghost"
             disabled={test.isPending}
@@ -399,6 +455,6 @@ function DeviceException({ use, device }: { use: Schemas["Use"]; device: Device 
           {line.reason && ` · ${line.reason}`}
         </p>
       )}
-    </div>
+    </form>
   );
 }

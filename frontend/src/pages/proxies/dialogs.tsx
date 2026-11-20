@@ -100,7 +100,9 @@ export function ProxyDialog({ proxy, trigger }: { proxy?: Proxy; trigger: ReactN
         <DialogHeader>
           <DialogTitle>{proxy ? "编辑代理" : "添加代理"}</DialogTitle>
           <DialogDescription>
-            保存后由在线的爬取程序测试连通性和出口 IP，通过后分配给选中的用途。
+            {proxy
+              ? "运行中可以保存。已领到线路的任务继续使用原连接。改过地址或凭据的代理会自动复测。"
+              : "保存后由在线的爬取程序自动测试。测试通过后，按用途标签和对应规则的代理范围分配。"}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">

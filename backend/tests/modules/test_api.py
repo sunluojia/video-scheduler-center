@@ -178,6 +178,53 @@ async def test_crawler_slots_set_on_the_page_go_out_with_the_heartbeat(client, s
     assert reply.json()["crawl_slots"] is None  # 分析服务不用
 
 
+async def test_download_progress_collects_online_crawlers_even_if_one_is_older(
+    client, service, executors
+):
+    for name in ("c1", "c2", "legacy", "old-progress", "offline"):
+        response = await service.put(
+            f"/api/crawler-services/{name}", json={"url": f"{CRAWLER_URL}/{name}", "version": "1"}
+        )
+        assert response.is_success
+    await service.delete("/api/crawler-services/offline")
+    first = {
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "work_id": "7001",
+        "stage": "downloading",
+        "received_bytes": 400,
+        "total_bytes": 1000,
+    }
+    second = {
+        **first,
+        "task_id": "00000000-0000-4000-8000-000000000002",
+        "work_id": "7002",
+        "total_bytes": None,
+    }
+    speed_header = "X-Download-Bytes-Per-Second"
+    executors.responses["GET", "/c1/api/download-progress"] = httpx.Response(
+        200, json=[first], headers={speed_header: "1024"}
+    )
+    executors.responses["GET", "/c2/api/download-progress"] = httpx.Response(
+        200, json=[second], headers={speed_header: "0"}
+    )
+    executors.responses["GET", "/legacy/api/download-progress"] = httpx.Response(404)
+    executors.responses["GET", "/old-progress/api/download-progress"] = httpx.Response(200, json=[])
+
+    response = await client.get("/api/executors/crawler/download-progress")
+    assert response.json() == [
+        {"instance_id": "c1", "downloads": [first], "download_bytes_per_second": 1024},
+        {"instance_id": "c2", "downloads": [second], "download_bytes_per_second": 0},
+        {"instance_id": "legacy", "downloads": None, "download_bytes_per_second": None},
+        {"instance_id": "old-progress", "downloads": [], "download_bytes_per_second": None},
+    ]
+    assert {item.url.path for item in executors.requests} == {
+        "/c1/api/download-progress",
+        "/c2/api/download-progress",
+        "/legacy/api/download-progress",
+        "/old-progress/api/download-progress",
+    }
+
+
 async def test_manual_executor_waits_for_heartbeat_and_only_deletes_offline(
     client, service, database
 ):

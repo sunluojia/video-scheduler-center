@@ -10,6 +10,7 @@ const rule = {
   local_port: null,
   mode: "priority",
   line_limit: 2,
+  targets: null,
   updated_at: now,
 };
 const card = (key: string, name: string) => ({
@@ -64,6 +65,7 @@ const common = {
   ],
   "GET /api/proxy-alerts": [],
   "GET /api/executors": [],
+  "GET /api/executors/crawler/download-progress": [],
 };
 
 /** 等下一个这种请求发出，返回它的请求体。 */
@@ -107,7 +109,7 @@ test("导入代理：选文件夹和用途，预览后导入", async ({ page }) 
   await expect(dialog).toBeHidden();
 });
 
-test("下载视频改成走代理池轮询", async ({ page }) => {
+test("下载视频从多个分组和单个代理按权重调度", async ({ page }) => {
   await mockApi(page, {
     ...common,
     "PUT /api/proxy-uses/crawler.download_video/rule": { ...rule, source: "pool" },
@@ -123,11 +125,89 @@ test("下载视频改成走代理池轮询", async ({ page }) => {
   await card.getByRole("button", { name: "设置" }).click();
   const sheet = page.getByRole("dialog");
   await sheet.getByRole("button", { name: "代理池" }).click();
-  await sheet.getByRole("button", { name: "轮询" }).click();
+  await sheet.getByRole("button", { name: "权重", exact: true }).click();
+  await sheet.getByRole("button", { name: "指定分组和代理" }).click();
+  await sheet.getByRole("checkbox", { name: "美国" }).check();
+  await sheet.getByRole("checkbox", { name: "日本" }).check();
+  await sheet.getByRole("spinbutton", { name: "美国的权重" }).fill("3");
+  await sheet.getByRole("button", { name: "单个代理" }).click();
+  await sheet.getByRole("textbox", { name: "搜索代理" }).fill("1.2.3.4");
+  await sheet.getByRole("checkbox", { name: "1.2.3.4:8080" }).check();
+  await sheet.getByRole("spinbutton", { name: "每条线路的并发上限" }).fill("4");
 
   const sent = body(page, "PUT", "/rule");
   await sheet.getByRole("button", { name: "保存" }).click();
-  expect(await sent).toEqual({ source: "pool", folder_id: null, mode: "rotate", line_limit: 2 });
+  expect(await sent).toEqual({
+    source: "pool",
+    mode: "weighted",
+    line_limit: 4,
+    targets: [
+      { kind: "folder", id: us.id, priority: 1, weight: 3 },
+      { kind: "folder", id: jp.id, priority: 1, weight: 1 },
+      { kind: "proxy", id: proxy.id, priority: 1, weight: 1 },
+    ],
+  });
+});
+
+test("下载进度和各设备的合计下载速度自动刷新", async ({ page }) => {
+  const video = {
+    task_id: "00000000-0000-4000-8000-000000000001",
+    work_id: "7001",
+    stage: "downloading",
+    received_bytes: 1024,
+    total_bytes: 4096,
+  };
+  const unknown = {
+    ...video,
+    task_id: "00000000-0000-4000-8000-000000000002",
+    work_id: "7002",
+    total_bytes: null,
+  };
+  const firstDevice = {
+    instance_id: "crawler-1",
+    downloads: [video],
+    download_bytes_per_second: 1024 ** 2,
+  };
+  await mockApi(page, {
+    ...common,
+    "GET /api/executors/crawler/download-progress": [
+      firstDevice,
+      { instance_id: "crawler-2", downloads: [unknown], download_bytes_per_second: 512 * 1024 },
+      { instance_id: "crawler-legacy", downloads: null },
+    ],
+  });
+
+  await page.goto("/proxies");
+  const known = page.getByRole("progressbar", { name: "视频 7001 下载进度" });
+  const undetermined = page.getByRole("progressbar", { name: "视频 7002 下载进度" });
+  await expect(known).toHaveAttribute("aria-valuenow", "25");
+  await expect(undetermined).toBeVisible();
+  await expect(undetermined).not.toHaveAttribute("aria-valuenow");
+  await expect(page.getByText("1.0 KB · 总大小未知")).toBeVisible();
+  await expect(page.getByText("1 台爬取设备暂时未提供下载进度")).toBeVisible();
+  const speed = page.getByTitle("在线爬取设备最近 5 秒的合计视频下载速度");
+  await expect(speed).toContainText("总下载速度 1.5 MB/s");
+  await expect(speed).toContainText("2/3 台设备已上报");
+
+  video.received_bytes = 3072;
+  firstDevice.download_bytes_per_second = 2 * 1024 ** 2;
+  await expect(known).toHaveAttribute("aria-valuenow", "75");
+  await expect(speed).toContainText("2.5 MB/s");
+  await page.getByRole("navigation").getByRole("link", { name: "执行程序" }).click();
+  await expect(known).toHaveAttribute("aria-valuenow", "75");
+  await expect(speed).toContainText("2.5 MB/s");
+});
+
+test("动态代理刷新出口时显示正在等待的任务数", async ({ page }) => {
+  await mockApi(page, {
+    ...common,
+    "GET /api/proxies": {
+      items: [{ ...proxy, status: "refreshing", dynamic: true, testing: true, in_use: 2 }],
+      total: 1,
+    },
+  });
+  await page.goto("/proxies");
+  await expect(page.getByText("等待 2 个任务归还线路")).toBeVisible();
 });
 
 test("拖动换文件夹：代理拖进文件夹，文件夹拖到另一个前面", async ({ page }) => {

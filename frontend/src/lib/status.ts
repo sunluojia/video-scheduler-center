@@ -137,7 +137,8 @@ export const ruleSources: Record<Schemas["RuleSource"], string> = {
 
 export const pickModes: Record<Schemas["PickMode"], string> = {
   priority: "优先级",
-  rotate: "轮询",
+  weighted: "权重",
+  rotate: "轮询（旧设置）",
 };
 
 /** 色调对应的颜色类，状态标记和进度条共用。 */

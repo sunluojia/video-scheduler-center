@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Literal, TypedDict
 from uuid import UUID, uuid4
 
 from scheduler_center.core.common.clock import utcnow
@@ -82,13 +83,14 @@ class CheckResult(StrEnum):
 class RuleSource(StrEnum):
     DIRECT = "direct"
     POOL = "pool"
-    """代理池里带这个用途的代理，可以只用某个文件夹里的。"""
+    """代理池里带这个用途的代理，可限定分组和单个代理。"""
     LOCAL_PORT = "local_port"
     """设备本机的代理端口，只能在设备规则里使用。"""
 
 
 class PickMode(StrEnum):
     PRIORITY = "priority"
+    WEIGHTED = "weighted"
     ROTATE = "rotate"
 
 
@@ -177,6 +179,8 @@ class Proxy:
     speed_tested_at: datetime | None = None
     speed_error: str | None = None
     created_at: datetime = field(default_factory=utcnow)
+    config_revision: UUID | None = None
+    """改过连接配置或开始刷新出口时更新，用来识别旧租约。"""
 
     @property
     def usable(self) -> bool:
@@ -198,6 +202,7 @@ class Proxy:
 
     def changed(self, now: datetime, *, address: bool) -> None:
         """地址或凭据改过：重新测试，正在进行的测试和测速作废；地址变了，原来的出口和速度也作废。"""
+        self.config_revision = uuid4()
         self.status, self.error, self.backoff = ProxyStatus.UNTESTED, None, 0
         self.testing_until = self.speed_at = None
         if address:
@@ -207,9 +212,13 @@ class Proxy:
 
     def refresh(self, now: datetime) -> None:
         """动态代理刷新出口：先排空，Worker 等它的线路都归还后再刷新并测试。"""
-        if self.refresh_url:
+        if not self.refresh_url:
+            return
+        if self.status != ProxyStatus.REFRESHING:
             self.status = ProxyStatus.REFRESHING
-            self.request_test(now)
+            self.config_revision = uuid4()
+            self.testing_until = None
+        self.request_test(now)
 
     def tested(
         self,
@@ -299,6 +308,16 @@ def subtree(folders: list[ProxyFolder], root: UUID) -> set[UUID]:
     return found
 
 
+type RuleTargetKind = Literal["folder", "proxy"]
+
+
+class RuleTarget(TypedDict):
+    kind: RuleTargetKind
+    id: str
+    priority: int
+    weight: int
+
+
 @dataclass
 class ProxyRule:
     """某个用途的集群规则，或某台设备在这个用途上的例外。设备没有例外时跟随集群规则。"""
@@ -307,7 +326,7 @@ class ProxyRule:
     device: str
     source: RuleSource = RuleSource.DIRECT
     folder_id: UUID | None = None
-    """只用这个文件夹（含子文件夹）里的代理；为空是整个代理池。"""
+    """旧版规则选的单个文件夹。"""
     local_port: int | None = None
     mode: PickMode = PickMode.PRIORITY
     """先用哪条和每条线路的同时数只在集群规则里设置。"""
@@ -315,6 +334,8 @@ class ProxyRule:
     cursor: str | None = None
     """轮询时上一次分配的线路。"""
     updated_at: datetime = field(default_factory=utcnow)
+    targets: list[RuleTarget] | None = None
+    """显式选择的分组和代理。None 时沿用 folder_id 或整个代理池，空列表是空范围。"""
 
 
 class LineState(StrEnum):
@@ -410,6 +431,7 @@ class Lease:
     released_at: datetime | None = None
     outcome: Outcome | None = None
     detail: str | None = None
+    proxy_revision: UUID | None = None
 
     def renew(self, now: datetime) -> None:
         self.expires_at = now + LEASE_TTL

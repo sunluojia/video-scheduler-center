@@ -13,6 +13,7 @@ from scheduler_center.modules.proxy.models import (
     ProxyRule,
     ProxyStatus,
     RuleSource,
+    RuleTargetKind,
     Service,
     Use,
 )
@@ -234,15 +235,32 @@ class Folders(BaseModel):
     """没放进文件夹的代理数。"""
 
 
+class RuleTargetIn(BaseModel):
+    kind: RuleTargetKind
+    id: UUID
+    priority: int = Field(1, ge=1, le=2_147_483_647)
+    weight: int = Field(1, ge=1, le=2_147_483_647)
+
+
+class RuleTargetView(RuleTargetIn):
+    label: str | None
+
+
 class RuleIn(BaseModel):
     source: RuleSource
     folder_id: UUID | None = None
     local_port: int | None = Field(None, ge=1, le=65535)
+    targets: list[RuleTargetIn] | None = None
 
     @model_validator(mode="after")
     def complete(self) -> Self:
         if self.source == RuleSource.LOCAL_PORT and not self.local_port:
             raise ValueError("请填写本机端口")
+        if self.source == RuleSource.POOL and self.targets is not None:
+            if self.folder_id is not None:
+                raise ValueError("请用 targets 设置所选分组和代理")
+            if len({(target.kind, target.id) for target in self.targets}) != len(self.targets):
+                raise ValueError("所选分组或代理重复")
         return self
 
 
@@ -264,16 +282,25 @@ class RuleView(BaseModel):
     local_port: int | None
     mode: PickMode
     line_limit: int
+    targets: list[RuleTargetView] | None
     updated_at: datetime
 
     @classmethod
-    def of(cls, rule: ProxyRule) -> Self:
+    def of(cls, rule: ProxyRule, labels: dict[tuple[RuleTargetKind, str], str]) -> Self:
         return cls(
             source=rule.source,
             folder_id=rule.folder_id,
             local_port=rule.local_port,
             mode=rule.mode,
             line_limit=rule.line_limit,
+            targets=(
+                [
+                    RuleTargetView(**target, label=labels.get((target["kind"], target["id"])))
+                    for target in rule.targets
+                ]
+                if rule.targets is not None
+                else None
+            ),
             updated_at=rule.updated_at,
         )
 

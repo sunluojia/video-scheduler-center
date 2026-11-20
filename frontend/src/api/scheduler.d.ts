@@ -522,6 +522,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executors/crawler/download-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Crawler Download Progress
+         * @description 汇总在线爬取设备的下载进度；一台设备暂不可用时继续显示其他设备。
+         */
+        get: operations["crawler_download_progress_api_executors_crawler_download_progress_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/proxies": {
         parameters: {
             query?: never;
@@ -1117,6 +1137,8 @@ export interface components {
             folder_id?: string | null;
             /** Local Port */
             local_port?: number | null;
+            /** Targets */
+            targets?: components["schemas"]["RuleTargetIn"][] | null;
             /** @default priority */
             mode: components["schemas"]["PickMode"];
             /**
@@ -1143,6 +1165,15 @@ export interface components {
             nickname?: string | null;
             /** Platform User Id */
             platform_user_id?: string | null;
+        };
+        /** CrawlerDownloadView */
+        CrawlerDownloadView: {
+            /** Instance Id */
+            instance_id: string;
+            /** Downloads */
+            downloads: components["schemas"]["DownloadTransfer"][] | null;
+            /** Download Bytes Per Second */
+            download_bytes_per_second?: number | null;
         };
         /**
          * CrawlerTaskKind
@@ -1280,6 +1311,25 @@ export interface components {
             /** In Use */
             in_use: number;
             line: components["schemas"]["LineView"] | null;
+        };
+        /** DownloadTransfer */
+        DownloadTransfer: {
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Work Id */
+            work_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "preparing" | "downloading" | "uploading";
+            /** Received Bytes */
+            received_bytes: number;
+            /** Total Bytes */
+            total_bytes: number | null;
         };
         /** EventView */
         EventView: {
@@ -1707,7 +1757,7 @@ export interface components {
          * PickMode
          * @enum {string}
          */
-        PickMode: "priority" | "rotate";
+        PickMode: "priority" | "weighted" | "rotate";
         /** Preview */
         Preview: {
             /** Source */
@@ -1939,12 +1989,56 @@ export interface components {
             folder_id?: string | null;
             /** Local Port */
             local_port?: number | null;
+            /** Targets */
+            targets?: components["schemas"]["RuleTargetIn"][] | null;
         };
         /**
          * RuleSource
          * @enum {string}
          */
         RuleSource: "direct" | "pool" | "local_port";
+        /** RuleTargetIn */
+        RuleTargetIn: {
+            kind: components["schemas"]["RuleTargetKind"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Priority
+             * @default 1
+             */
+            priority: number;
+            /**
+             * Weight
+             * @default 1
+             */
+            weight: number;
+        };
+        /** @enum {string} */
+        RuleTargetKind: "folder" | "proxy";
+        /** RuleTargetView */
+        RuleTargetView: {
+            kind: components["schemas"]["RuleTargetKind"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Priority
+             * @default 1
+             */
+            priority: number;
+            /**
+             * Weight
+             * @default 1
+             */
+            weight: number;
+            /** Label */
+            label: string | null;
+        };
         /** RuleView */
         RuleView: {
             source: components["schemas"]["RuleSource"];
@@ -1955,6 +2049,8 @@ export interface components {
             mode: components["schemas"]["PickMode"];
             /** Line Limit */
             line_limit: number;
+            /** Targets */
+            targets: components["schemas"]["RuleTargetView"][] | null;
             /**
              * Updated At
              * Format: date-time
@@ -3105,6 +3201,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    crawler_download_progress_api_executors_crawler_download_progress_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerDownloadView"][];
                 };
             };
         };

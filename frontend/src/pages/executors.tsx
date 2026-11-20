@@ -6,6 +6,7 @@ import { $ai, $api, type AnalysisSchemas, type Schemas } from "@/api/client";
 import { IdentityAlerts, ProxyAlerts } from "@/components/alerts";
 import { Confirm } from "@/components/confirm";
 import { DataTable } from "@/components/data-table";
+import { DownloadProgress } from "@/components/download-progress";
 import { Field } from "@/components/field";
 import { Facts, Metric, PageHeader, Panel, QueryState, Section } from "@/components/page";
 import { Status } from "@/components/status";
@@ -75,10 +76,18 @@ const columns: ColumnDef<Executor, unknown>[] = [
     ),
   },
   {
-    header: "并发",
-    size: 150,
+    header: "任务并发",
+    size: 170,
     cell: ({ row }) =>
-      row.original.kind === "crawler" ? <SlotsDialog executor={row.original} /> : null,
+      row.original.kind === "crawler" ? (
+        <SlotsDialog executor={row.original} />
+      ) : (
+        <Button asChild size="xs" variant="outline">
+          <Link to="/ai?tab=models">
+            <Pencil /> 模型并发
+          </Link>
+        </Button>
+      ),
   },
   {
     header: "操作",
@@ -242,7 +251,7 @@ function SlotsDialog({ executor }: { executor: Executor }) {
         <form className="space-y-4" onSubmit={submit}>
           <Field
             label="同时采集达人"
-            hint="每个开一个 Chrome 窗口，约 400 MB；同时能跑几个还受“获取信息”线路数和每条线路限制。"
+            hint="这台设备同时采集的达人数，每个任务使用一个 Chrome 窗口。实际并发还受「获取信息」可用线路的名额限制。"
           >
             <Input
               name="crawl_slots"
@@ -253,7 +262,10 @@ function SlotsDialog({ executor }: { executor: Executor }) {
               required
             />
           </Field>
-          <Field label="同时下载" hint="下载不开窗口，主要占带宽。">
+          <Field
+            label="同时下载"
+            hint="这台设备同时下载的视频数，还受「下载视频」可用线路的名额限制。"
+          >
             <Input
               name="download_slots"
               type="number"
@@ -311,7 +323,24 @@ function AnalysisStatus() {
   const modelName = (id: string) =>
     models.data?.find((model) => model.id === id)?.name ?? id.slice(0, 8);
   return (
-    <Section title="分析服务">
+    <Section
+      title="分析服务"
+      extra={
+        <Button asChild variant="outline" size="sm">
+          <Link to="/ai?tab=models">
+            <Pencil /> 设置模型并发
+          </Link>
+        </Button>
+      }
+    >
+      <details className="text-muted-foreground text-xs">
+        <summary className="cursor-pointer">分析 Worker 的部署并发设置</summary>
+        <p className="mt-2">
+          在分析服务部署环境中设置下载并发 <code>VA_DOWNLOAD_SLOTS</code>、媒体处理并发{" "}
+          <code>VA_MEDIA_SLOTS</code> 和后台线程池大小 <code>VA_THREAD_POOL_SIZE</code>。 Worker
+          在启动时读取这些值。
+        </p>
+      </details>
       <Panel>
         <QueryState query={query}>
           {(raw) => {
@@ -459,6 +488,9 @@ function CrawlerStatus() {
             );
           }}
         </QueryState>
+      </Panel>
+      <Panel className="p-5">
+        <DownloadProgress />
       </Panel>
     </Section>
   );

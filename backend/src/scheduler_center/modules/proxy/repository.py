@@ -226,7 +226,7 @@ class LineRepository(Repository):
             return {}
         rows = [
             {"use": use, "key": key, "device": device, "score": 0, "backoff": 0, "updated_at": now}
-            for key in keys
+            for key in sorted(keys)
         ]
         await self._session.execute(upsert(proxy_lines).values(rows).on_conflict_do_nothing())
         stmt = (

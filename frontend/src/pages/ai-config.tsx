@@ -4,6 +4,7 @@ import { Check, GitCompare, Pencil, Plus, Trash2, Undo2 } from "lucide-react";
 import { Switch } from "radix-ui";
 import { type ReactNode, useId, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
 import { $ai, type AnalysisSchemas } from "@/api/client";
@@ -63,6 +64,12 @@ function useSaved(message: string) {
 }
 
 export function AiConfigPage() {
+  const [search, setSearch] = useSearchParams();
+  const selected = search.get("tab");
+  const tab =
+    selected === "models" || selected === "providers" || selected === "prompts"
+      ? selected
+      : "routes";
   return (
     <>
       <PageHeader
@@ -70,7 +77,16 @@ export function AiConfigPage() {
         title="AI 配置"
         meta="供应商、模型和提示词保存在分析服务，修改后对新开始的阶段生效。"
       />
-      <Tabs defaultValue="routes" className="rise space-y-4">
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          const next = new URLSearchParams(search);
+          if (value === "routes") next.delete("tab");
+          else next.set("tab", value);
+          setSearch(next, { replace: true });
+        }}
+        className="rise space-y-4"
+      >
         <TabsList>
           <TabsTrigger value="routes">任务路由</TabsTrigger>
           <TabsTrigger value="models">模型</TabsTrigger>
@@ -407,7 +423,7 @@ function Models() {
                 <TableRow>
                   <TableHead>模型</TableHead>
                   <TableHead>供应商</TableHead>
-                  <TableHead className="text-right">并发上限</TableHead>
+                  <TableHead className="text-right">请求并发上限</TableHead>
                   <TableHead className="text-right">每分钟请求</TableHead>
                   <TableHead className="text-right">超时</TableHead>
                   <TableHead>参数</TableHead>
@@ -432,8 +448,13 @@ function Models() {
                         model={model}
                         providers={providers.data ?? []}
                         trigger={
-                          <Button variant="ghost" size="icon" aria-label="编辑">
-                            <Pencil />
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-label="编辑"
+                            title="编辑模型并发和参数"
+                          >
+                            <Pencil /> 设置
                           </Button>
                         }
                       />
@@ -541,7 +562,7 @@ function ModelDialog({
             <Input className="font-mono" {...form.register("name")} />
           </Field>
           <div className="grid grid-cols-3 gap-3">
-            <Field label="并发上限" error={errors.max_concurrency?.message}>
+            <Field label="请求并发上限" error={errors.max_concurrency?.message}>
               <Input type="number" {...form.register("max_concurrency")} />
             </Field>
             <Field label="每分钟请求" error={errors.requests_per_minute?.message}>
@@ -551,6 +572,10 @@ function ModelDialog({
               <Input type="number" {...form.register("timeout_seconds")} />
             </Field>
           </div>
+          <p className="text-muted-foreground text-xs">
+            请求并发是所有分析 Worker
+            同时发给此模型的请求数。使用同一模型的听音、识别和汇总阶段共享这个上限。
+          </p>
           {showCacheSwitch && (
             <div className="bg-muted/50 flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
               <div className="space-y-1.5">

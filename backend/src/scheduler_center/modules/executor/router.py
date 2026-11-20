@@ -1,19 +1,22 @@
+import asyncio
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Request, Response
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
     Field,
     StringConstraints,
+    TypeAdapter,
     UrlConstraints,
     field_validator,
 )
 
 from scheduler_center.core.common.clock import utcnow
-from scheduler_center.core.common.errors import Conflict
+from scheduler_center.core.common.errors import Conflict, Unavailable
 from scheduler_center.core.web.dependencies import DatabaseDep
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.models import Executor, ExecutorKind
@@ -109,6 +112,25 @@ class RegistrationReply(BaseModel):
     """爬取程序的并发，执行程序页设置；分析服务没有。"""
 
 
+class DownloadTransfer(BaseModel):
+    task_id: UUID
+    work_id: str
+    stage: Literal["preparing", "downloading", "uploading"]
+    received_bytes: int = Field(ge=0)
+    total_bytes: int | None = Field(gt=0)
+
+
+class CrawlerDownloadView(BaseModel):
+    instance_id: str
+    downloads: list[DownloadTransfer] | None
+    """旧版本或暂时无法访问的实例返回 null。"""
+    download_bytes_per_second: int | None = Field(default=None, ge=0)
+    """该设备最近 5 秒的平均视频下载速度。"""
+
+
+_DOWNLOADS = TypeAdapter(list[DownloadTransfer])
+
+
 @registration.put("/{kind}-services/{instance_id}")
 async def register(
     kind: ExecutorKind,
@@ -199,6 +221,40 @@ async def set_slots(
 async def executor_status(kind: ExecutorKind, gateway: GatewayDep) -> Any:
     """执行程序的运行状态：排队、进行中、额度占用等，内容由执行程序决定。"""
     return await gateway.call(kind, "GET", "/api/status")
+
+
+@router.get("/executors/crawler/download-progress")
+async def crawler_download_progress(
+    request: Request, database: DatabaseDep, gateway: GatewayDep
+) -> list[CrawlerDownloadView]:
+    """汇总在线爬取设备的下载进度；一台设备暂不可用时继续显示其他设备。"""
+    now, timeout = utcnow(), _heartbeat_timeout(request)
+    async with database.transaction() as session:
+        online = [
+            item
+            for item in await ExecutorRepository(session).all()
+            if item.kind == ExecutorKind.CRAWLER and item.online(now, timeout)
+        ]
+
+    async def read(executor: Executor) -> CrawlerDownloadView:
+        try:
+            async with asyncio.timeout(2):
+                response = await gateway.request(executor, "GET", "/api/download-progress")
+            response.raise_for_status()
+            downloads = _DOWNLOADS.validate_json(response.content)
+        except Unavailable, TimeoutError, httpx.HTTPStatusError, ValueError:
+            return CrawlerDownloadView(instance_id=executor.instance_id, downloads=None)
+        try:
+            rate = int(response.headers["X-Download-Bytes-Per-Second"])
+        except KeyError, ValueError:
+            rate = -1
+        return CrawlerDownloadView(
+            instance_id=executor.instance_id,
+            downloads=downloads,
+            download_bytes_per_second=rate if rate >= 0 else None,
+        )
+
+    return await asyncio.gather(*(read(executor) for executor in online))
 
 
 @router.api_route(

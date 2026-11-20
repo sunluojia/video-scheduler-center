@@ -1,6 +1,8 @@
 """各用途的页面接口：用途卡片（规则、线路、设备）、设备例外和需要人处理的问题。"""
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +28,8 @@ from scheduler_center.modules.proxy.models import (
     ProxyRule,
     ProxyStatus,
     RuleSource,
+    RuleTarget,
+    RuleTargetKind,
     Use,
     device_line,
 )
@@ -60,6 +64,10 @@ async def list_uses(request: Request, database: DatabaseDep) -> list[UseView]:
         views = []
         for use in Use:
             cluster, own = await rules.cluster(use), await rules.devices(use)
+            labels = await _target_labels(
+                session,
+                (target for rule in (cluster, *own.values()) for target in rule.targets or []),
+            )
             lines = await _line_views(session, use, cluster.line_limit, now)
             in_use = await LeaseRepository(session).in_use(now, by=proxy_leases.c.device, use=use)
             devices = {
@@ -81,7 +89,7 @@ async def list_uses(request: Request, database: DatabaseDep) -> list[UseView]:
                         instance_id=device,
                         online=bool(executor and executor.online(now, timeout)),
                         last_seen_at=executor.last_seen_at if executor else None,
-                        rule=rule and RuleView.of(rule),
+                        rule=rule and RuleView.of(rule, labels),
                         in_use=in_use.get(device, 0),
                         line=next((line for line in lines if line.key == key), None),
                     )
@@ -92,7 +100,7 @@ async def list_uses(request: Request, database: DatabaseDep) -> list[UseView]:
                     service=use.service,
                     service_name=SERVICE_NAMES[use.service],
                     name=USE_NAMES[use],
-                    rule=RuleView.of(cluster),
+                    rule=RuleView.of(cluster, labels),
                     proxies=len(await ProxyRepository(session).serving(use)),
                     lines=lines,
                     devices=rows,
@@ -107,11 +115,11 @@ async def set_cluster_rule(use: Use, body: ClusterRuleIn, database: DatabaseDep)
     async with database.transaction() as session:
         rules = RuleRepository(session)
         rule = await rules.cluster(use, lock=True)
-        await _apply(session, rule, body)
+        labels = await _apply(session, rule, body)
         rule.mode, rule.line_limit = body.mode, body.line_limit
         await rules.save(rule)
         await Live(session).proxies_changed()
-    return RuleView.of(rule)
+    return RuleView.of(rule, labels)
 
 
 @router.put("/proxy-uses/{use}/devices/{instance_id}")
@@ -125,10 +133,10 @@ async def set_device_rule(
         rules = RuleRepository(session)
         rule = await rules.get(ProxyRule, (use, instance_id), lock=True)
         rule = rule or ProxyRule(use, instance_id)
-        await _apply(session, rule, body)
+        labels = await _apply(session, rule, body)
         await rules.save(rule)
         await Live(session).proxies_changed()
-    return RuleView.of(rule)
+    return RuleView.of(rule, labels)
 
 
 @router.delete("/proxy-uses/{use}/devices/{instance_id}", status_code=204)
@@ -243,14 +251,41 @@ async def _line_views(session: AsyncSession, use: Use, limit: int, now: datetime
     return views
 
 
-async def _apply(session: AsyncSession, rule: ProxyRule, body: RuleIn) -> None:
+async def _apply(
+    session: AsyncSession, rule: ProxyRule, body: RuleIn
+) -> dict[tuple[RuleTargetKind, str], str]:
     """只保留当前走法用得到的设置；轮询位置随规则重置。"""
+    targets = None
+    if body.source == RuleSource.POOL and body.targets is not None:
+        targets = [target.model_dump(mode="json") for target in body.targets]
+    labels = await _target_labels(session, targets or [])
+    if targets and len(labels) != len(targets):
+        raise Invalid("所选分组或代理已删除，请重新选择")
     if body.source == RuleSource.POOL and body.folder_id:
         await FolderRepository(session).require(ProxyFolder, body.folder_id)
     rule.source = body.source
     rule.folder_id = body.folder_id if body.source == RuleSource.POOL else None
+    rule.targets = targets
     rule.local_port = body.local_port if body.source == RuleSource.LOCAL_PORT else None
     rule.cursor, rule.updated_at = None, utcnow()
+    return labels
+
+
+async def _target_labels(
+    session: AsyncSession, targets: Iterable[RuleTarget]
+) -> dict[tuple[RuleTargetKind, str], str]:
+    ids = {"folder": set(), "proxy": set()}
+    for target in targets:
+        ids[target["kind"]].add(UUID(target["id"]))
+    labels: dict[tuple[RuleTargetKind, str], str] = {}
+    if ids["folder"]:
+        for folder in await FolderRepository(session).all():
+            if folder.id in ids["folder"]:
+                labels["folder", str(folder.id)] = folder.name
+    if ids["proxy"]:
+        for proxy in await ProxyRepository(session).of_ids(list(ids["proxy"])):
+            labels["proxy", str(proxy.id)] = proxy.name or f"{proxy.host}:{proxy.port}"
+    return labels
 
 
 def _timeout(request: Request) -> timedelta:

@@ -4,6 +4,26 @@ export type Folder = Schemas["FolderView"];
 export type UseCard = Schemas["UseView"];
 export type Tag = Schemas["Service"] | Schemas["Use"];
 
+export function ruleTargets(
+  rule: Schemas["RuleView"] | null | undefined,
+): Schemas["RuleView"]["targets"] {
+  if (rule?.targets != null) return rule.targets;
+  return rule?.folder_id
+    ? [{ kind: "folder", id: rule.folder_id, priority: 1, weight: 1, label: null }]
+    : null;
+}
+
+export function targetsBody(targets: Schemas["RuleView"]["targets"]): Schemas["RuleIn"]["targets"] {
+  return (
+    targets?.map(({ kind, id, priority, weight }) => ({
+      kind,
+      id,
+      priority: priority || 1,
+      weight: weight || 1,
+    })) ?? null
+  );
+}
+
 /** 地址栏里“未分组”的写法；文件夹参数为空表示全部代理。 */
 export const UNFILED = "none";
 

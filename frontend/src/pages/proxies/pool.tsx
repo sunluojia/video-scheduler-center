@@ -417,7 +417,12 @@ function ProxyState({ proxy }: { proxy: Proxy }) {
   const [label, tone]: [string, Tone] = proxy.enabled
     ? proxyStatus[proxy.status]
     : ["已停用", "muted"];
-  const note = proxy.testing ? "等待爬取程序测试" : proxy.error;
+  const draining = proxy.status === "refreshing" && proxy.in_use > 0;
+  const note = draining
+    ? `等待 ${proxy.in_use} 个任务归还线路`
+    : proxy.testing
+      ? "等待爬取程序测试"
+      : proxy.error;
   return (
     <div className="space-y-0.5">
       <Status label={label} tone={tone} />

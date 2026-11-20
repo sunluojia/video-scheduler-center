@@ -1,7 +1,9 @@
 """线路分配：服务每次要访问外网前按用途申请一条线路，用完归还并报告线路表现。"""
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from random import choices
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,10 +16,13 @@ from scheduler_center.modules.proxy.models import (
     Outcome,
     PickMode,
     Proxy,
+    ProxyFolder,
     ProxyRule,
     RuleSource,
+    RuleTarget,
     Use,
     device_line,
+    serves,
     subtree,
     tree_order,
 )
@@ -46,6 +51,12 @@ class Wait:
     reason: str
 
 
+@dataclass(frozen=True)
+class Candidate:
+    proxy: Proxy | None
+    target: RuleTarget | None = None
+
+
 class Dispatcher:
     def __init__(self, session: AsyncSession) -> None:
         self._proxies = ProxyRepository(session)
@@ -60,31 +71,36 @@ class Dispatcher:
     ) -> Grant | Wait:
         """按设备在这个用途上生效的规则挑一条线路：避开这次任务失败过的线路，除非别无选择。"""
         rule, cluster = await self._rules.effective(use, device), await self._rules.cluster(use)
-        candidates = await self.candidates(use, device, rule)
+        candidates = await self.candidates(use, device, rule, cluster.mode)
         if not candidates:
             return Wait(60, "规则里没有可用的代理")
         own = rule.source in (RuleSource.DIRECT, RuleSource.LOCAL_PORT)
         lines = await self._lines.lock(use, list(candidates), device if own else None, now)
         in_use = await self._leases.in_use(now, use=use, keys=list(candidates))
         usable = [key for key in candidates if lines[key].state(now) in _USABLE]
-        preferred = [key for key in usable if key not in avoid] or usable
 
         def capacity(key: str) -> int:
             return 1 if lines[key].state(now) == LineState.PROBING else cluster.line_limit
 
-        free = [key for key in preferred if in_use.get(key, 0) < capacity(key)]
+        free = [key for key in usable if in_use.get(key, 0) < capacity(key)]
         if free:
-            key = self._pick(cluster.mode, rule.cursor, list(candidates), free)
-            if cluster.mode == PickMode.ROTATE:
-                rule.cursor = key
+            preferred = [key for key in free if key not in avoid] or free
+            key = self._pick(cluster.mode, rule.cursor, candidates, preferred)
             probe = lines[key].state(now) == LineState.PROBING
-            return self._grant(device, use, task_id, key, candidates[key], rule, probe, now)
+            result = await self._grant(
+                device, use, task_id, key, candidates[key].proxy, rule, probe, now
+            )
+            if isinstance(result, Grant) and cluster.mode == PickMode.ROTATE:
+                rule.cursor = key
+            return result
         if usable:
             return Wait(5, "线路都占满了")
         if line := _early_probe(lines.values(), in_use, now):
-            line.probe_at = now
-            proxy = candidates[line.key]
-            return self._grant(device, use, task_id, line.key, proxy, rule, True, now)
+            proxy = candidates[line.key].proxy
+            result = await self._grant(device, use, task_id, line.key, proxy, rule, True, now)
+            if isinstance(result, Grant):
+                line.probe_at = now
+            return result
         earliest = min(line.resume_at() for line in lines.values() if line.resume_at())
         seconds = int((earliest - now).total_seconds())
         return Wait(min(max(seconds, 5), 60), "线路都在冷却或限流")
@@ -104,6 +120,8 @@ class Dispatcher:
         lease.release(outcome, detail, now)
         line = (await self._lines.lock(lease.use, [lease.line], None, now))[lease.line]
         proxy = lease.proxy_id and await self._proxies.get(Proxy, lease.proxy_id, lock=True)
+        if proxy and (proxy.config_revision != lease.proxy_revision or proxy.line != lease.line):
+            proxy = None  # 旧连接的结果不能覆盖当前代理的测试状态
         if outcome == Outcome.THROTTLED:
             line.throttle(now, retry_after or 60, detail)
         elif lease.proxy_id and outcome in (Outcome.PROXY_DOWN, Outcome.AUTH_FAILED):
@@ -119,36 +137,53 @@ class Dispatcher:
     async def renew(self, device: str, lease_ids: list[UUID], now: datetime) -> None:
         await self._leases.renew(device, lease_ids, now)
 
-    async def candidates(self, use: Use, device: str, rule: ProxyRule) -> dict[str, Proxy | None]:
-        """候选线路及线路内取用的代理。池里的代理按文件夹的先后顺序排，同一文件夹里按添加顺序；
-        出口相同的代理合并成一条线路。"""
+    async def candidates(
+        self, use: Use, device: str, rule: ProxyRule, mode: PickMode = PickMode.PRIORITY
+    ) -> dict[str, Candidate]:
+        """按规则限定代理范围，同一出口归并为一条候选线路。"""
         if rule.source == RuleSource.DIRECT:
-            return {device_line(device): None}
+            return {device_line(device): Candidate(None)}
         if rule.source == RuleSource.LOCAL_PORT:
-            return {device_line(device, rule.local_port): None}
-        folders = await self._folders.all()
-        rank = {folder.id: index for index, folder in enumerate(tree_order(folders))}
-        scope = subtree(folders, rule.folder_id) if rule.folder_id else None
-        found = [
-            proxy
-            for proxy in await self._proxies.serving(use)
-            if scope is None or proxy.folder_id in scope
-        ]
-        found.sort(key=lambda proxy: rank.get(proxy.folder_id, len(rank)))  # 没放文件夹的排最后
-        candidates: dict[str, Proxy | None] = {}
-        for proxy in found:
-            candidates.setdefault(proxy.line, proxy)
+            return {device_line(device, rule.local_port): Candidate(None)}
+        folders = tree_order(await self._folders.all())
+        rank = {folder.id: index for index, folder in enumerate(folders)}
+        proxies = await self._proxies.serving(use)
+        proxies.sort(key=lambda proxy: rank.get(proxy.folder_id, len(rank)))
+        if rule.targets is None:
+            scope = subtree(folders, rule.folder_id) if rule.folder_id else None
+            found = [
+                Candidate(proxy) for proxy in proxies if scope is None or proxy.folder_id in scope
+            ]
+        else:
+            found = _selected_candidates(folders, proxies, rule.targets, mode)
+        candidates: dict[str, Candidate] = {}
+        for candidate in found:
+            if candidate.proxy and candidate.proxy.line is not None:
+                candidates.setdefault(candidate.proxy.line, candidate)
         return candidates
 
     @staticmethod
-    def _pick(mode: PickMode, cursor: str | None, order: list[str], free: list[str]) -> str:
-        """优先级取第一条有空位的；轮询从上一次所用线路的下一条开始取。"""
-        if mode != PickMode.ROTATE or cursor not in order:
-            return free[0]
-        start = order.index(cursor) + 1
-        return min(free, key=lambda key: (order.index(key) - start) % len(order))
+    def _pick(
+        mode: PickMode, cursor: str | None, candidates: dict[str, Candidate], free: list[str]
+    ) -> str:
+        if mode == PickMode.WEIGHTED and len(free) > 1:
+            # 一个分组的权重由其中有空位的线路均分。
+            groups = [
+                (target["kind"], target["id"]) if (target := candidates[key].target) else key
+                for key in free
+            ]
+            counts = Counter(groups)
+            weights = [
+                (target["weight"] if (target := candidates[key].target) else 1) / counts[group]
+                for key, group in zip(free, groups, strict=True)
+            ]
+            return choices(free, weights, k=1)[0]
+        if mode == PickMode.ROTATE and cursor in candidates:
+            order = {key: index for index, key in enumerate(candidates)}
+            return min(free, key=lambda key: (order[key] - order[cursor] - 1) % len(order))
+        return free[0]
 
-    def _grant(
+    async def _grant(
         self,
         device: str,
         use: Use,
@@ -158,7 +193,19 @@ class Dispatcher:
         rule: ProxyRule,
         probe: bool,
         now: datetime,
-    ) -> Grant:
+    ) -> Grant | Wait:
+        if proxy is not None:
+            folder_id = proxy.folder_id
+            # 线路已经加锁。锁住代理直到租约发出，刷新出口才能等到所有已发出的租约归还。
+            proxy = await self._proxies.get(Proxy, proxy.id, lock=True)
+            if (
+                proxy is None
+                or not proxy.usable
+                or proxy.line != key
+                or proxy.folder_id != folder_id
+                or not serves(proxy.uses, use)
+            ):
+                return Wait(1, "代理配置已变更，稍后重新分配")
         lease = Lease(
             device,
             use,
@@ -168,6 +215,7 @@ class Dispatcher:
             probe,
             acquired_at=now,
             expires_at=now + LEASE_TTL,
+            proxy_revision=proxy.config_revision if proxy else None,
         )
         self._session.add(lease)
         local_port = rule.local_port if rule.source == RuleSource.LOCAL_PORT else None
@@ -175,6 +223,29 @@ class Dispatcher:
 
 
 _USABLE = (LineState.OPEN, LineState.PROBING)
+
+
+def _selected_candidates(
+    folders: list[ProxyFolder], proxies: list[Proxy], targets: list[RuleTarget], mode: PickMode
+) -> list[Candidate]:
+    """单选代理覆盖分组设置，子分组覆盖其父分组。"""
+    selected = {(target["kind"], target["id"]): target for target in targets}
+    scope: dict[UUID, RuleTarget] = {}
+    for folder in folders:
+        target = selected.get(("folder", str(folder.id))) or scope.get(folder.parent_id)
+        if target:
+            scope[folder.id] = target
+
+    matches = []
+    for proxy in proxies:
+        target = selected.get(("proxy", str(proxy.id))) or scope.get(proxy.folder_id)
+        if target:
+            matches.append((proxy, target))
+    if mode == PickMode.PRIORITY:
+        matches.sort(key=lambda pair: pair[1]["priority"])
+    elif mode == PickMode.WEIGHTED:
+        matches.sort(key=lambda pair: pair[1]["kind"] != "proxy")
+    return [Candidate(proxy, target) for proxy, target in matches]
 
 
 def _early_probe(lines, in_use: dict[str, int], now: datetime) -> Line | None:
