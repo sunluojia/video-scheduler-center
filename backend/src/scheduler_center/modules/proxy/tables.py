@@ -23,6 +23,7 @@ from scheduler_center.core.database.mapping import (
 from scheduler_center.modules.proxy.models import (
     Lease,
     Line,
+    ListingResult,
     Outcome,
     PickMode,
     Proxy,
@@ -133,7 +134,15 @@ proxy_leases = Table(
     Column("outcome", enum_column(Outcome)),
     Column("detail", Text),
     Column("proxy_revision", Uuid),
+    Column("listing_result", enum_column(ListingResult)),
     Index("ix_proxy_leases_open", "use", "line", postgresql_where=text("released_at IS NULL")),
+    Index(
+        "ix_proxy_leases_listing_result",
+        "use",
+        "line",
+        "released_at",
+        postgresql_where=text("listing_result IN ('complete', 'empty_response')"),
+    ),
 )
 """租约同时是线路表现的记录，保留 24 小时；代理删除后记录照常保留。"""
 

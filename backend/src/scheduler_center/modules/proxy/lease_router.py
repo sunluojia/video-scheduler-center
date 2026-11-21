@@ -39,7 +39,12 @@ async def release(lease_id: UUID, body: LeaseResult, database: DatabaseDep) -> N
     """尝试结束时归还线路，报告这条线路的表现；重复归还忽略。"""
     async with database.transaction() as session:
         await Dispatcher(session).release(
-            lease_id, body.outcome, body.detail, body.retry_after, utcnow()
+            lease_id,
+            body.outcome,
+            body.detail,
+            body.retry_after,
+            utcnow(),
+            listing_result=body.listing_result,
         )
         if body.outcome != Outcome.NORMAL:
             await Live(session).proxies_changed()

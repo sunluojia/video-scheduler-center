@@ -1710,6 +1710,7 @@ export interface components {
             detail?: string | null;
             /** Retry After */
             retry_after?: number | null;
+            listing_result?: components["schemas"]["ListingResult"] | null;
         };
         /**
          * LineState
@@ -1749,6 +1750,11 @@ export interface components {
             /** Tested At */
             tested_at: string | null;
         };
+        /**
+         * ListingResult
+         * @enum {string}
+         */
+        ListingResult: "complete" | "empty_response" | "read_failed";
         /** Move */
         Move: {
             /** Ids */

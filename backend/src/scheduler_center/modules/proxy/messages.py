@@ -6,7 +6,14 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from scheduler_center.modules.proxy.dispatcher import Grant
-from scheduler_center.modules.proxy.models import CheckResult, Outcome, Proxy, ProxyProtocol, Use
+from scheduler_center.modules.proxy.models import (
+    CheckResult,
+    ListingResult,
+    Outcome,
+    Proxy,
+    ProxyProtocol,
+    Use,
+)
 
 
 class LeaseRequest(BaseModel):
@@ -73,8 +80,10 @@ class LeaseResult(BaseModel):
     outcome: Outcome
     detail: str | None = Field(None, max_length=500)
     """失败的步骤和原因，页面上显示。"""
-    retry_after: int | None = Field(None, ge=1, le=3600)
+    retry_after: int | None = Field(None, ge=1, le=2_147_483_647)
     """限流时网站给的 Retry-After 秒数。"""
+    listing_result: ListingResult | None = None
+    """采集端的作品列表读取结果。"""
 
 
 class CheckItem(BaseModel):

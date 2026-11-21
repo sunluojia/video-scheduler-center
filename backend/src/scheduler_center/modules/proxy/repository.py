@@ -11,7 +11,9 @@ from scheduler_center.core.database.repository import Repository
 from scheduler_center.modules.proxy.models import (
     CLUSTER,
     LEASE_TTL,
+    Lease,
     Line,
+    ListingResult,
     Outcome,
     Proxy,
     ProxyFolder,
@@ -243,6 +245,28 @@ class LineRepository(Repository):
 
 
 class LeaseRepository(Repository):
+    async def tasks_with_empty_lists(self, lease: Lease, since: datetime) -> int:
+        """同一线路最近一份完整列表之后，返回空正文的不同任务数。"""
+        column = proxy_leases.c
+        scope = (
+            column.use == lease.use,
+            column.line == lease.line,
+            column.acquired_at >= since,
+            column.released_at >= since,
+            column.task_id.is_not(None),
+        )
+        last_complete = (
+            select(func.max(column.released_at))
+            .where(*scope, column.listing_result == ListingResult.COMPLETE)
+            .scalar_subquery()
+        )
+        stmt = select(func.count(column.task_id.distinct())).where(
+            *scope,
+            column.listing_result == ListingResult.EMPTY_RESPONSE,
+            column.released_at > func.coalesce(last_complete, since),
+        )
+        return await self._session.scalar(stmt) or 0
+
     async def in_use(
         self,
         now: datetime,

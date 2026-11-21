@@ -3,7 +3,7 @@
 import asyncio
 import json
 from datetime import timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -16,6 +16,8 @@ from scheduler_center.modules.proxy.models import (
     CheckResult,
     Lease,
     Line,
+    LineState,
+    ListingResult,
     Proxy,
     ProxyStatus,
     Use,
@@ -56,8 +58,10 @@ async def use_pool(client, use: str = DOWNLOAD, **rule) -> None:
     assert (await client.put(f"/api/proxy-uses/{use}/rule", json=body)).status_code == 200
 
 
-async def lease(service, device: str = DEVICE, avoid=(), use: str = DOWNLOAD) -> dict:
-    body = {"device": device, "use": use, "avoid": [*avoid]}
+async def lease(
+    service, device: str = DEVICE, avoid=(), use: str = DOWNLOAD, *, task_id=None
+) -> dict:
+    body = {"device": device, "use": use, "avoid": [*avoid], "task_id": task_id}
     response = await service.post("/api/proxy-leases", json=body)
     assert response.status_code == 200
     return response.json()
@@ -91,6 +95,67 @@ async def folder(client, name: str, parent_id=None) -> str:
 async def expire_cooldowns(database) -> None:
     async with database.transaction() as session:
         await session.execute(update(proxy_lines).values(cooldown_until=utcnow()))
+
+
+async def test_only_repeated_empty_bodies_across_distinct_tasks_cool_the_crawl_line(
+    client, service, database
+):
+    key = "203.0.113.1"
+    await lines(client, database, 1, uses=[CRAWL])
+    await use_pool(client, CRAWL, line_limit=3)
+    a, b, c = (str(uuid4()) for _ in range(3))
+
+    async def report(task_id, result, outcome="suspect"):
+        reply = await lease(service, use=CRAWL, task_id=task_id)
+        assert line_of(reply) == key
+        await give_back(service, reply, outcome, listing_result=result)
+        return await load(database, Lease, UUID(reply["lease"]["lease_id"]))
+
+    for _ in range(3):
+        released = await report(a, "empty_response")
+    assert released.listing_result == ListingResult.EMPTY_RESPONSE and released.released_at
+    for task_id in (a, b, c):
+        await report(task_id, "read_failed")
+    await report(b, "empty_response")
+    active = await line(database, key, CRAWL)
+    assert active.state(utcnow()) == LineState.OPEN and active.score == 0
+
+    await report(c, "complete", "normal")
+    await report(b, "empty_response")
+    await report(c, "empty_response")
+    assert (await line(database, key, CRAWL)).state(utcnow()) == LineState.OPEN
+    await report(a, "empty_response")
+    cooling = await line(database, key, CRAWL)
+    assert cooling.state(utcnow()) == LineState.COOLING and cooling.backoff == 0
+    assert cooling.cooldown_until - cooling.updated_at == timedelta(seconds=60)
+    assert (await lease(service, use=CRAWL))["lease"] is None
+
+    await expire_cooldowns(database)
+    await report(a, "empty_response")
+    active = await line(database, key, CRAWL)
+    assert active.state(utcnow()) == LineState.OPEN and active.backoff == 0
+
+
+async def test_a_failed_list_does_not_extend_an_existing_probe_cooldown(client, service, database):
+    key = "203.0.113.1"
+    await lines(client, database, 1, uses=[CRAWL])
+    await use_pool(client, CRAWL)
+    for _ in range(3):
+        await give_back(service, await lease(service, use=CRAWL), "suspect")
+    await expire_cooldowns(database)
+    before = await line(database, key, CRAWL)
+
+    for result in ("read_failed", "empty_response"):
+        probe = await lease(service, use=CRAWL, task_id=str(uuid4()))
+        assert probe["lease"]["probe"]
+        await give_back(service, probe, "suspect", listing_result=result)
+        current = await line(database, key, CRAWL)
+        assert current.state(utcnow()) == LineState.PROBING
+        assert (current.backoff, current.cooldown_until) == (before.backoff, before.cooldown_until)
+
+    recovered = await lease(service, use=CRAWL, task_id=str(uuid4()))
+    await give_back(service, recovered, listing_result="complete")
+    assert (await line(database, key, CRAWL)).state(utcnow()) == LineState.OPEN
 
 
 async def test_import_previews_rows_and_skips_duplicates(client):

@@ -13,6 +13,7 @@ from scheduler_center.modules.proxy.models import (
     Lease,
     Line,
     LineState,
+    ListingResult,
     Outcome,
     PickMode,
     Proxy,
@@ -36,6 +37,8 @@ from scheduler_center.modules.proxy.repository import (
 
 EARLY_PROBE = timedelta(seconds=60)
 """线路都在冷却时，最多每 60 秒提前放一个申请去试探。"""
+LISTING_WINDOW = timedelta(minutes=2)
+EMPTY_LIST_TASK_LIMIT = 3
 
 
 @dataclass
@@ -112,12 +115,25 @@ class Dispatcher:
         detail: str | None,
         retry_after: int | None,
         now: datetime,
+        *,
+        listing_result: ListingResult | None = None,
     ) -> None:
         """归还线路：池里的代理连不上或认证失败只记在代理上，其他表现记在线路上。重复归还忽略。"""
         lease = await self._leases.require(Lease, lease_id, lock=True)
         if lease.released_at:
             return
         lease.release(outcome, detail, now)
+        if lease.use == Use.CRAWL and lease.task_id is not None:
+            if outcome == Outcome.NORMAL and listing_result == ListingResult.COMPLETE:
+                lease.listing_result = listing_result
+            elif outcome == Outcome.SUSPECT and listing_result in (
+                ListingResult.READ_FAILED,
+                ListingResult.EMPTY_RESPONSE,
+            ):
+                lease.listing_result = listing_result
+                if listing_result == ListingResult.EMPTY_RESPONSE:
+                    await self._report_empty_list(lease, now)
+                return
         line = (await self._lines.lock(lease.use, [lease.line], None, now))[lease.line]
         proxy = lease.proxy_id and await self._proxies.get(Proxy, lease.proxy_id, lock=True)
         if proxy and (proxy.config_revision != lease.proxy_revision or proxy.line != lease.line):
@@ -133,6 +149,18 @@ class Dispatcher:
             line.report(outcome, now, probe=lease.probe, detail=detail)
             if proxy and outcome == Outcome.NORMAL:
                 proxy.worked()
+
+    async def _report_empty_list(self, lease: Lease, now: datetime) -> None:
+        line = (await self._lines.lock(lease.use, [lease.line], None, now))[lease.line]
+        if line.state(now) != LineState.OPEN:
+            return
+        since = now - LISTING_WINDOW
+        if line.cooldown_until is not None:
+            since = max(since, line.cooldown_until)
+        if line.throttled_until is not None:
+            since = max(since, line.throttled_until)
+        if await self._leases.tasks_with_empty_lists(lease, since) >= EMPTY_LIST_TASK_LIMIT:
+            line.cool_after_empty_lists(now)
 
     async def renew(self, device: str, lease_ids: list[UUID], now: datetime) -> None:
         await self._leases.renew(device, lease_ids, now)
@@ -251,7 +279,9 @@ def _selected_candidates(
 def _early_probe(lines, in_use: dict[str, int], now: datetime) -> Line | None:
     """线路都在冷却时，把最早到期的失败冷却线路提前拿出来试探；限流期内的不提前。"""
     failing = [
-        line for line in lines if line.state(now) == LineState.COOLING and not in_use.get(line.key)
+        line
+        for line in lines
+        if line.backoff and line.state(now) == LineState.COOLING and not in_use.get(line.key)
     ]
     if not failing:
         return None

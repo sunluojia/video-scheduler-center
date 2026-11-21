@@ -105,6 +105,12 @@ class Outcome(StrEnum):
     THROTTLED = "throttled"
 
 
+class ListingResult(StrEnum):
+    COMPLETE = "complete"
+    EMPTY_RESPONSE = "empty_response"
+    READ_FAILED = "read_failed"
+
+
 def exit_line(ip: str) -> str:
     """出口 IP 所属的线路：IPv4 按地址；IPv6 按 /64 网段，CDN 通常按 /64 识别 IPv6 用户。"""
     address = ipaddress.ip_address(ip)
@@ -408,6 +414,12 @@ class Line:
         self.throttled_until = max(self.throttled_until or until, until)
         self.reason, self.updated_at = detail or "被限流", now
 
+    def cool_after_empty_lists(self, now: datetime) -> None:
+        """多个任务收到空正文，短暂休息后恢复正常分配。"""
+        self.cooldown_until = now + timedelta(seconds=MIN_COOLDOWN)
+        self.probe_at = self.updated_at = now
+        self.reason = "多个任务的作品列表返回空正文"
+
     def _cool(self, now: datetime, seconds: int) -> None:
         """进入冷却；提前试探也要从这时起至少隔 60 秒。"""
         self.score, self.backoff, self.probe_at = 0, seconds, now
@@ -432,6 +444,7 @@ class Lease:
     outcome: Outcome | None = None
     detail: str | None = None
     proxy_revision: UUID | None = None
+    listing_result: ListingResult | None = None
 
     def renew(self, now: datetime) -> None:
         self.expires_at = now + LEASE_TTL
