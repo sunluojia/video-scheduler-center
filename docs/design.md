@@ -151,6 +151,7 @@ sequenceDiagram
 | `POST /api/batches/{batch_id}/cancel` | 取消这个批次：丢弃它的全部任务，不再回传事件 |
 | `POST /api/tasks/{task_id}/cancel` | 取消一个任务 |
 | `GET /api/status` | 运行状态，“执行程序”页显示：`crawl`、`download` 各是 `{"running": 进行中, "queued": 还没开始的}`；`identities` 是 `{"target": 分到的, "ready": 可用的}`，没有身份池时为 `null`；`leases` 正在用的线路数；`paused_batches` 暂停的批次 ID；`download_paused_until` 下载连续失败时设备暂停到的时间，没暂停为 `null` |
+| `GET /api/crawl-progress` | 正在采集的达人任务，包含 `task_id`、`handle`、`stage`（`waiting_line`、`profile`、`listing`）、已读页数 `pages_read`、候选作品数 `works_found` 和作品上限 `max_works`。候选按作品 ID 去重、按截止时间筛选，计数最多到作品上限。调度中心汇总在线设备，供「执行程序」显示达人信息获取和视频列表获取进度。 |
 | `GET /api/download-progress` | 当前下载列表，包含 `task_id`、平台 `work_id`、阶段 `stage`（`preparing`、`downloading` 或 `uploading`）、已下载 `received_bytes` 和总大小 `total_bytes`。总大小未知时为 `null`。响应头 `X-Download-Bytes-Per-Second` 表示本机最近 5 秒接收视频数据的平均速率。调度中心查询在线爬取设备，页面每 2 秒更新进度和合计速度。 |
 
 调度中心在暂停、继续、取消批次时先提交自己的状态，再通知各个在线的执行程序；通知失败只在页面上提示，不回滚。取消时发件箱里该批次还没投递的任务一并撤回。取消锁住批次后，正在处理的事件照常提交：行锁用 `FOR NO KEY UPDATE`，与外键检查兼容。即使没有收到通知，已取消批次的事件和上传也会被调度中心忽略或拒绝。

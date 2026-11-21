@@ -17,8 +17,10 @@ from pydantic import (
 
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.core.common.errors import Conflict, Unavailable
+from scheduler_center.core.database.engine import Database
 from scheduler_center.core.web.dependencies import DatabaseDep
 from scheduler_center.modules.executor.dependencies import GatewayDep
+from scheduler_center.modules.executor.gateway import Gateway
 from scheduler_center.modules.executor.models import Executor, ExecutorKind
 from scheduler_center.modules.executor.repository import ExecutorRepository
 from scheduler_center.modules.identity.repository import IdentityPoolRepository
@@ -117,6 +119,21 @@ class RegistrationReply(BaseModel):
     """爬取程序的并发，执行程序页设置；分析服务没有。"""
 
 
+class CrawlProgress(BaseModel):
+    task_id: UUID
+    handle: str
+    stage: Literal["waiting_line", "profile", "listing"]
+    pages_read: int = Field(ge=0)
+    works_found: int = Field(ge=0)
+    max_works: int = Field(gt=0)
+
+
+class CrawlerCrawlView(BaseModel):
+    instance_id: str
+    crawls: list[CrawlProgress] | None
+    """旧版本或暂时无法访问的实例返回 null。"""
+
+
 class DownloadTransfer(BaseModel):
     task_id: UUID
     work_id: str
@@ -133,6 +150,7 @@ class CrawlerDownloadView(BaseModel):
     """该设备最近 5 秒的平均视频下载速度。"""
 
 
+_CRAWLS = TypeAdapter(list[CrawlProgress])
 _DOWNLOADS = TypeAdapter(list[DownloadTransfer])
 
 
@@ -231,24 +249,34 @@ async def executor_status(kind: ExecutorKind, gateway: GatewayDep) -> Any:
     return await gateway.call(kind, "GET", "/api/status")
 
 
+@router.get("/executors/crawler/crawl-progress")
+async def crawler_crawl_progress(
+    request: Request, database: DatabaseDep, gateway: GatewayDep
+) -> list[CrawlerCrawlView]:
+    """汇总在线爬取设备的达人资料和作品列表获取进度。"""
+    online = await _online_crawlers(database, _heartbeat_timeout(request))
+
+    async def read(executor: Executor) -> CrawlerCrawlView:
+        try:
+            response = await _request_progress(gateway, executor, "/api/crawl-progress")
+            crawls = _CRAWLS.validate_json(response.content)
+        except Unavailable, TimeoutError, httpx.HTTPStatusError, ValueError:
+            crawls = None
+        return CrawlerCrawlView(instance_id=executor.instance_id, crawls=crawls)
+
+    return await asyncio.gather(*(read(executor) for executor in online))
+
+
 @router.get("/executors/crawler/download-progress")
 async def crawler_download_progress(
     request: Request, database: DatabaseDep, gateway: GatewayDep
 ) -> list[CrawlerDownloadView]:
     """汇总在线爬取设备的下载进度；一台设备暂不可用时继续显示其他设备。"""
-    now, timeout = utcnow(), _heartbeat_timeout(request)
-    async with database.transaction() as session:
-        online = [
-            item
-            for item in await ExecutorRepository(session).all()
-            if item.kind == ExecutorKind.CRAWLER and item.online(now, timeout)
-        ]
+    online = await _online_crawlers(database, _heartbeat_timeout(request))
 
     async def read(executor: Executor) -> CrawlerDownloadView:
         try:
-            async with asyncio.timeout(2):
-                response = await gateway.request(executor, "GET", "/api/download-progress")
-            response.raise_for_status()
+            response = await _request_progress(gateway, executor, "/api/download-progress")
             downloads = _DOWNLOADS.validate_json(response.content)
         except Unavailable, TimeoutError, httpx.HTTPStatusError, ValueError:
             return CrawlerDownloadView(instance_id=executor.instance_id, downloads=None)
@@ -289,3 +317,19 @@ async def ai_config(path: str, request: Request, gateway: GatewayDep) -> Respons
 
 def _heartbeat_timeout(request: Request) -> timedelta:
     return timedelta(seconds=request.app.state.settings.heartbeat_timeout_seconds)
+
+
+async def _online_crawlers(database: Database, timeout: timedelta) -> list[Executor]:
+    now = utcnow()
+    async with database.transaction() as session:
+        return [
+            item
+            for item in await ExecutorRepository(session).all()
+            if item.kind == ExecutorKind.CRAWLER and item.online(now, timeout)
+        ]
+
+
+async def _request_progress(gateway: Gateway, executor: Executor, path: str) -> httpx.Response:
+    async with asyncio.timeout(2):
+        response = await gateway.request(executor, "GET", path)
+    return response.raise_for_status()

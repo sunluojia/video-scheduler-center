@@ -522,6 +522,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executors/crawler/crawl-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Crawler Crawl Progress
+         * @description 汇总在线爬取设备的达人资料和作品列表获取进度。
+         */
+        get: operations["crawler_crawl_progress_api_executors_crawler_crawl_progress_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executors/crawler/download-progress": {
         parameters: {
             query?: never;
@@ -1156,6 +1176,27 @@ export interface components {
          * @enum {string}
          */
         CrawlConclusion: "ok" | "private" | "not_found" | "failed";
+        /** CrawlProgress */
+        CrawlProgress: {
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Handle */
+            handle: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "waiting_line" | "profile" | "listing";
+            /** Pages Read */
+            pages_read: number;
+            /** Works Found */
+            works_found: number;
+            /** Max Works */
+            max_works: number;
+        };
         /**
          * CrawledProfile
          * @description 爬取程序核实过的达人资料；读不到的字段为空。
@@ -1169,6 +1210,13 @@ export interface components {
             nickname?: string | null;
             /** Platform User Id */
             platform_user_id?: string | null;
+        };
+        /** CrawlerCrawlView */
+        CrawlerCrawlView: {
+            /** Instance Id */
+            instance_id: string;
+            /** Crawls */
+            crawls: components["schemas"]["CrawlProgress"][] | null;
         };
         /** CrawlerDownloadView */
         CrawlerDownloadView: {
@@ -3219,6 +3267,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    crawler_crawl_progress_api_executors_crawler_crawl_progress_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlerCrawlView"][];
                 };
             };
         };

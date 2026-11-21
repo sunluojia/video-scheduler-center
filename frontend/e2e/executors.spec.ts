@@ -104,6 +104,57 @@ test("在页面上改爬取程序的并发", async ({ page }) => {
   await expect(page.getByText("crawler-1 下一次心跳（15 秒内）按新的并发运行")).toBeVisible();
 });
 
+test("爬取程序显示资料、列表和下载三个阶段", async ({ page }) => {
+  const profile = {
+    task_id: "00000000-0000-4000-8000-000000000001",
+    handle: "alice",
+    stage: "profile",
+    pages_read: 0,
+    works_found: 0,
+    max_works: 5,
+  };
+  const listing = {
+    ...profile,
+    task_id: "00000000-0000-4000-8000-000000000002",
+    handle: "bob",
+    stage: "listing",
+    pages_read: 1,
+    works_found: 2,
+  };
+  await mockApi(page, {
+    "GET /api/executors": [],
+    "GET /api/executors/crawler/crawl-progress": [
+      { instance_id: "crawler-1", crawls: [profile] },
+      { instance_id: "crawler-2", crawls: [listing] },
+      { instance_id: "crawler-old", crawls: null },
+    ],
+    "GET /api/executors/crawler/download-progress": [],
+    "GET /api/identities": { target: 8, devices: [], alerts: [] },
+    "GET /api/proxy-alerts": [],
+  });
+  await page.goto("/executors");
+
+  const info = page.getByRole("region", { name: "达人信息获取" });
+  const works = page.getByRole("region", { name: "达人视频列表获取" });
+  await expect(info).toContainText("@alice");
+  await expect(info).toContainText("读取达人主页");
+  await expect(works).toContainText("crawler-2");
+  await expect(works).toContainText("已读 1 页");
+  const bar = works.getByRole("progressbar", { name: "@bob 作品列表获取进度" });
+  await expect(bar).toHaveAttribute("aria-valuetext", "候选 2/5 条");
+  await expect(page.getByRole("heading", { name: "达人视频下载" })).toBeVisible();
+  await expect(page.getByText("1 台设备暂未上报采集进度")).toBeVisible();
+
+  profile.stage = "listing";
+  listing.pages_read = 2;
+  listing.works_found = 5;
+  await expect(info).not.toContainText("@alice");
+  await expect(works).toContainText("@alice");
+  await expect(works).toContainText("已读 2 页 · 确认最新作品");
+  await expect(bar).toHaveAttribute("aria-valuenow", "5");
+  await expect(bar).toHaveAttribute("aria-valuemax", "5");
+});
+
 test("从执行程序直接修改模型请求并发", async ({ page }) => {
   const now = new Date().toISOString();
   const executor = {

@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { $ai, $api, type AnalysisSchemas, type Schemas } from "@/api/client";
 import { IdentityAlerts, ProxyAlerts } from "@/components/alerts";
 import { Confirm } from "@/components/confirm";
+import { CrawlProgress } from "@/components/crawl-progress";
 import { DataTable } from "@/components/data-table";
 import { DownloadProgress } from "@/components/download-progress";
 import { Field } from "@/components/field";
@@ -456,7 +457,7 @@ function CrawlerStatus() {
             return (
               <div className="space-y-5 p-5">
                 <div className="grid grid-cols-3 gap-6">
-                  <Metric label="获取作品进行中" value={status.crawl.running} />
+                  <Metric label="达人采集进行中" value={status.crawl.running} />
                   <Metric label="下载进行中" value={status.download.running} />
                   <Metric
                     label="可用身份"
@@ -501,8 +502,11 @@ function CrawlerStatus() {
           }}
         </QueryState>
       </Panel>
+      <Panel className="space-y-3 p-5">
+        <CrawlProgress />
+      </Panel>
       <Panel className="p-5">
-        <DownloadProgress />
+        <DownloadProgress title="达人视频下载" />
       </Panel>
     </Section>
   );

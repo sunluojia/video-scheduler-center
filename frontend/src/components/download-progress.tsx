@@ -9,7 +9,7 @@ const stages = {
   uploading: "下载完成，正在上传",
 };
 
-export function DownloadProgress() {
+export function DownloadProgress({ title = "下载进度" }: { title?: string }) {
   const query = $api.useQuery(
     "get",
     "/api/executors/crawler/download-progress",
@@ -27,7 +27,7 @@ export function DownloadProgress() {
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h4 className="text-sm font-medium">下载进度</h4>
+        <h4 className="text-sm font-medium">{title}</h4>
         <div
           className="text-muted-foreground text-xs"
           title="在线爬取设备最近 5 秒的合计视频下载速度"

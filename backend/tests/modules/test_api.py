@@ -270,6 +270,41 @@ async def test_crawler_slots_set_on_the_page_go_out_with_the_heartbeat(client, s
     assert reply.json()["crawl_slots"] is None and reply.json()["warm_slots"] is None
 
 
+async def test_crawl_progress_shows_both_stages_from_online_crawlers(client, service, executors):
+    for name in ("c1", "c2", "legacy", "offline"):
+        response = await service.put(
+            f"/api/crawler-services/{name}", json={"url": f"{CRAWLER_URL}/{name}", "version": "1"}
+        )
+        assert response.is_success
+    await service.delete("/api/crawler-services/offline")
+    profile = {
+        "task_id": "00000000-0000-4000-8000-000000000001",
+        "handle": "alice",
+        "stage": "profile",
+        "pages_read": 0,
+        "works_found": 0,
+        "max_works": 5,
+    }
+    listing = {
+        **profile,
+        "task_id": "00000000-0000-4000-8000-000000000002",
+        "handle": "bob",
+        "stage": "listing",
+        "pages_read": 2,
+        "works_found": 3,
+    }
+    executors.responses["GET", "/c1/api/crawl-progress"] = httpx.Response(200, json=[profile])
+    executors.responses["GET", "/c2/api/crawl-progress"] = httpx.Response(200, json=[listing])
+    executors.responses["GET", "/legacy/api/crawl-progress"] = httpx.Response(404)
+
+    response = await client.get("/api/executors/crawler/crawl-progress")
+    assert response.json() == [
+        {"instance_id": "c1", "crawls": [profile]},
+        {"instance_id": "c2", "crawls": [listing]},
+        {"instance_id": "legacy", "crawls": None},
+    ]
+
+
 async def test_download_progress_collects_online_crawlers_even_if_one_is_older(
     client, service, executors
 ):
