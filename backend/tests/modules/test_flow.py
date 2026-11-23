@@ -105,11 +105,14 @@ async def test_creator_goes_from_crawl_to_summary(database, service):
 
 
 async def test_crawl_conclusions(database):
-    batch = await new_batch(database, "private", "missing", "broken", "empty", "photos")
-    private, missing, broken, empty, photos = await creators(database, batch)
+    batch = await new_batch(database, "private", "missing", "broken", "empty", "photos", "locked")
+    private, missing, broken, empty, photos, locked = await creators(database, batch)
 
     await crawler_says(
         database, await crawl_task(database, private), "crawled", conclusion="private"
+    )
+    await crawler_says(
+        database, await crawl_task(database, locked), "crawled", conclusion="login_required"
     )
     await crawler_says(
         database, await crawl_task(database, missing), "crawled", conclusion="not_found"
@@ -131,6 +134,7 @@ async def test_crawl_conclusions(database):
         (CreatorStatus.RECRAWL, "爬取失败：登录失效", []),
         (CreatorStatus.COMPLETED, None, ["无作品"]),
         (CreatorStatus.COMPLETED, None, ["图文作者"]),
+        (CreatorStatus.FAILED, "需要登录", []),
     ]
     assert await messages(database, "download_video") == []
 

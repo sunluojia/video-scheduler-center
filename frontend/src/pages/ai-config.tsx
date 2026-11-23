@@ -40,7 +40,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { diffLines } from "@/lib/diff";
-import { dateTime } from "@/lib/format";
+import { dateTime, percent } from "@/lib/format";
+import { cacheRate, useRecentAiUsage } from "@/lib/usage";
 import { cn } from "@/lib/utils";
 
 type Kind = "listen" | "recognize" | "summarize";
@@ -349,14 +350,31 @@ function parseModelParams(text: string): Model["params"] | null {
   }
 }
 
-/** 与分析服务应用百炼显式缓存标记的条件一致。 */
+/** 百炼（华北2）支持显式缓存的千问模型，与分析服务的列表一致。 */
+const EXPLICIT_CACHE_MODELS = new Set([
+  "qwen4-max",
+  "qwen3.8-max",
+  "qwen3.7-max",
+  "qwen3.7-plus",
+  "qwen3.6-plus",
+  "qwen3.5-plus",
+  "qwen-plus",
+  "qwen3.8-flash",
+  "qwen3.7-flash",
+  "qwen3.6-flash",
+  "qwen3.5-flash",
+  "qwen-flash",
+  "qwen3-vl-plus",
+]);
+
+/** 与分析服务应用百炼显式缓存标记的条件一致；支持的模型默认开启。 */
 function supportsExplicitCache(
   provider: Provider | undefined,
   name: string,
   params: Model["params"] | null,
 ) {
   if (
-    name.trim() !== "qwen3.8-flash" ||
+    !EXPLICIT_CACHE_MODELS.has(name.trim()) ||
     provider?.provider !== "openai" ||
     !provider.base_url ||
     params?.use_responses_api
@@ -397,10 +415,13 @@ const modelSchema = z.object({
 function Models() {
   const models = $ai.useQuery("get", "/api/ai/models");
   const providers = $ai.useQuery("get", "/api/ai/providers");
+  const usage = useRecentAiUsage();
   const saved = useSaved("已删除模型");
   const remove = $ai.useMutation("delete", "/api/ai/models/{model_id}", { onSuccess: saved });
-  const providerName = (id: string) =>
-    providers.data?.find((provider) => provider.id === id)?.name ?? "—";
+  const providerOf = (id: string) => providers.data?.find((provider) => provider.id === id);
+  const explicit = (model: Model) =>
+    supportsExplicitCache(providerOf(model.provider_id), model.name, model.params) &&
+    model.params.bailian_explicit_cache !== false;
   return (
     <Section
       title="模型"
@@ -426,6 +447,9 @@ function Models() {
                   <TableHead className="text-right">请求并发上限</TableHead>
                   <TableHead className="text-right">每分钟请求</TableHead>
                   <TableHead className="text-right">超时</TableHead>
+                  <TableHead className="text-right" title="命中缓存的输入 token ÷ 输入 token">
+                    缓存命中（24 小时）
+                  </TableHead>
                   <TableHead>参数</TableHead>
                   <TableHead className="w-24" />
                 </TableRow>
@@ -434,12 +458,20 @@ function Models() {
                 {data.map((model) => (
                   <TableRow key={model.id}>
                     <TableCell className="font-mono text-xs font-medium">{model.name}</TableCell>
-                    <TableCell>{providerName(model.provider_id)}</TableCell>
+                    <TableCell>{providerOf(model.provider_id)?.name ?? "—"}</TableCell>
                     <TableCell className="text-right font-mono">{model.max_concurrency}</TableCell>
                     <TableCell className="text-right font-mono">
                       {model.requests_per_minute}
                     </TableCell>
                     <TableCell className="text-right font-mono">{model.timeout_seconds}s</TableCell>
+                    <TableCell className="text-right">
+                      <div className="font-mono">
+                        {percent(cacheRate(usage.data?.filter((row) => row.model_id === model.id)))}
+                      </div>
+                      <div className="text-muted-foreground text-xs">
+                        {explicit(model) ? "显式缓存" : "隐式缓存"}
+                      </div>
+                    </TableCell>
                     <TableCell className="max-w-56 truncate font-mono text-xs">
                       {JSON.stringify(model.params)}
                     </TableCell>
@@ -503,7 +535,7 @@ function ModelDialog({
       requests_per_minute: String(model?.requests_per_minute ?? 60),
       timeout_seconds: String(model?.timeout_seconds ?? 120),
       params: JSON.stringify(modelParams, null, 2),
-      bailian_explicit_cache: bailian_explicit_cache === true,
+      bailian_explicit_cache: bailian_explicit_cache !== false,
     },
   });
   const saved = useSaved("已保存模型");
@@ -516,10 +548,11 @@ function ModelDialog({
   const update = $ai.useMutation("put", "/api/ai/models/{model_id}", { onSuccess });
   const submit = form.handleSubmit(
     ({ params, bailian_explicit_cache: cacheEnabled, ...values }) => {
+      // 支持的模型默认开启，只在关掉时记下 false
       const provider = providers.find(({ id }) => id === values.provider_id);
       delete params.bailian_explicit_cache;
-      if (cacheEnabled && (!provider || supportsExplicitCache(provider, values.name, params))) {
-        params.bailian_explicit_cache = true;
+      if (!cacheEnabled && supportsExplicitCache(provider, values.name, params)) {
+        params.bailian_explicit_cache = false;
       }
       const body = { ...values, params };
       if (model) update.mutate({ params: { path: { model_id: model.id } }, body });
@@ -581,7 +614,8 @@ function ModelDialog({
               <div className="space-y-1.5">
                 <Label htmlFor={cacheSwitchId}>显式 Prompt Cache</Label>
                 <p id={`${cacheSwitchId}-hint`} className="text-muted-foreground text-xs">
-                  复用固定提示词和工具定义。缓存写入单独计费。
+                  默认开启，复用固定的提示词和工具定义。建缓存按输入单价的 125% 计费，命中按
+                  10%，命中率在模型列表和数据看板里看。
                 </p>
               </div>
               <Switch.Root

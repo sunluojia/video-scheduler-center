@@ -284,6 +284,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ai/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usage
+         * @description 时间段内的模型调用，按开始时间分时段、任务类型和模型汇总；可以只看一个批次。
+         */
+        get: operations["usage_api_ai_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ai/prompts/{kind}": {
         parameters: {
             query?: never;
@@ -348,6 +368,12 @@ export interface components {
             outcome: components["schemas"]["CallOutcome"] | null;
             /** Error */
             error: string | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Cached Tokens */
+            cached_tokens: number | null;
         };
         /**
          * CallOutcome
@@ -698,6 +724,41 @@ export interface components {
             started_at: string | null;
             /** Finished At */
             finished_at: string | null;
+        };
+        /**
+         * UsageRow
+         * @description 一个时段内一类任务在一个模型上的调用汇总。
+         */
+        UsageRow: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            kind: components["schemas"]["TaskKind"];
+            /**
+             * Model Id
+             * Format: uuid
+             */
+            model_id: string;
+            /** Model */
+            model: string | null;
+            /** Calls */
+            calls: number;
+            /** Succeeded */
+            succeeded: number;
+            /** Failed */
+            failed: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Cached Tokens */
+            cached_tokens: number;
+            /** Cache Input Tokens */
+            cache_input_tokens: number;
+            /** Busy Seconds */
+            busy_seconds: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -1324,6 +1385,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    usage_api_ai_usage_get: {
+        parameters: {
+            query: {
+                since: string;
+                until: string;
+                bucket?: "hour" | "day";
+                batch_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageRow"][];
+                };
             };
             /** @description Validation Error */
             422: {

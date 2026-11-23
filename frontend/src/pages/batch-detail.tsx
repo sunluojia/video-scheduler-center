@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
+  ChartColumn,
   ChevronRight,
   Download,
   ExternalLink,
@@ -15,7 +16,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { $api, fetchClient, type Schemas } from "@/api/client";
 import { Confirm } from "@/components/confirm";
@@ -33,6 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ago, dateTime } from "@/lib/format";
 import { useFilters } from "@/lib/params";
 import { useDone } from "@/lib/refresh";
@@ -121,6 +123,15 @@ export function BatchPanel() {
   );
 }
 
+function Hint({ text, children }: { text: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent>{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function Count({ value }: { value: number }) {
   return <span className="text-muted-foreground font-mono text-xs">{value}</span>;
 }
@@ -180,14 +191,18 @@ function Header({ batch }: { batch: BatchRow }) {
           </Button>
         )}
         {batch.status === "running" && (
-          <Button size="sm" variant="outline" onClick={() => pause.mutate(path)}>
-            <Pause /> 暂停
-          </Button>
+          <Hint text="不再抓取新的达人；已在下载、识别、汇总的视频继续处理完">
+            <Button size="sm" variant="outline" onClick={() => pause.mutate(path)}>
+              <Pause /> 暂停采集
+            </Button>
+          </Hint>
         )}
         {batch.status === "paused" && (
-          <Button size="sm" variant="outline" onClick={() => resume.mutate(path)}>
-            <Play /> 继续
-          </Button>
+          <Hint text="接着抓取剩下的达人">
+            <Button size="sm" variant="outline" onClick={() => resume.mutate(path)}>
+              <Play /> 恢复采集
+            </Button>
+          </Hint>
         )}
         {started && (
           <>
@@ -214,6 +229,13 @@ function Header({ batch }: { batch: BatchRow }) {
             <Download /> 导出 Excel
           </a>
         </Button>
+        {started && (
+          <Button size="sm" variant="outline" asChild>
+            <Link to={`/stats?batch=${batch.id}`}>
+              <ChartColumn /> 数据看板
+            </Link>
+          </Button>
+        )}
         {active ? (
           <Confirm
             title="取消批次"

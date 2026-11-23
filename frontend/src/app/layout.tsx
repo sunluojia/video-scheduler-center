@@ -1,4 +1,4 @@
-import { Bot, Boxes, Fingerprint, Layers, Network, Radio } from "lucide-react";
+import { Bot, Boxes, ChartColumn, Fingerprint, Layers, Network, Radio } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router";
 import { useIdentities, useProxyAlerts } from "@/api/alerts";
 import { $api } from "@/api/client";
@@ -9,6 +9,7 @@ import { useLive } from "@/stores/live";
 
 const NAV = [
   { to: "/batches", label: "批次工作台", icon: Layers },
+  { to: "/stats", label: "数据看板", icon: ChartColumn },
   { to: "/executors", label: "执行程序", icon: Boxes },
   { to: "/proxies", label: "代理", icon: Network, badge: ProxyAlertCount },
   { to: "/identities", label: "账号池", icon: Fingerprint, badge: IdentityAlertCount },

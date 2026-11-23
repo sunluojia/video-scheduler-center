@@ -59,6 +59,7 @@ from scheduler_center.modules.crawl.messages import (
     CreatorRef,
     DownloadFailed,
     DownloadVideo,
+    Uploaded,
     WorkRef,
 )
 from scheduler_center.modules.crawl.models import (
@@ -86,7 +87,11 @@ WORK_STATUS = {
 }
 """分析任务的状态对应的视频状态；取消的任务不再改变视频。"""
 
-UNREACHABLE = {CrawlConclusion.PRIVATE: "私密账号", CrawlConclusion.NOT_FOUND: "找不到此达人"}
+UNREACHABLE = {
+    CrawlConclusion.PRIVATE: "私密账号",
+    CrawlConclusion.LOGIN_REQUIRED: "需要登录",
+    CrawlConclusion.NOT_FOUND: "找不到此达人",
+}
 REDO = (WorkStatus.COMPLETED, WorkStatus.FAILED, WorkStatus.NEEDS_REVIEW, WorkStatus.ABANDONED)
 """可以重新下载或重新分析的视频：已经得出结果，或等待人工处理。"""
 
@@ -117,7 +122,10 @@ class Flow:
         return batch
 
     async def pause(self, batch_id: UUID) -> Batch:
-        """执行程序按批次暂停；这里只记录状态，已发布的任务由执行程序暂缓。"""
+        """暂停采集：爬取程序不再开始这个批次新的获取作品，已锁定作品的下载、识别和汇总照常。
+
+        这里只记录状态，已发布的爬取任务由爬取程序暂缓；继续之前批次不会结束。
+        """
         batch = await self._batches.require(Batch, batch_id, lock=True)
         batch.pause()
         await self._live.changed(batch.id)
@@ -243,6 +251,10 @@ class Flow:
         work = await self._works.require(Work, task.work_id)
         material = Material(work.id, size, sha256, material_id)
         self._materials.add(material)
+        uploaded = Uploaded(
+            event_id=material.id, task_id=task.id, run=run, occurred_at=now, size=size
+        )
+        await self._events.record(Source.CRAWLER, task.id, task.batch_id, uploaded)
         task.finish(CrawlerTaskStatus.SUCCEEDED, now)
         await self._analyze(creator, work, material, now)
         await self._settle(creator, now)

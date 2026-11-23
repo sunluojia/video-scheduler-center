@@ -69,7 +69,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Pause */
+        /**
+         * Pause
+         * @description 暂停采集：只通知爬取程序，下载和分析照常进行。
+         */
         post: operations["pause_api_batches__batch_id__pause_post"];
         delete?: never;
         options?: never;
@@ -86,7 +89,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resume */
+        /**
+         * Resume
+         * @description 恢复采集。分析服务也通知一下，解除旧版本整批暂停时留下的暂停。
+         */
         post: operations["resume_api_batches__batch_id__resume_post"];
         delete?: never;
         options?: never;
@@ -954,6 +960,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stats
+         * @description 各环节在这段时间里的完成数、成功率、用时和失败原因，以及当前的达人和视频分布。
+         *
+         *     AI 调用的次数、token 和缓存命中由分析服务的 /api/ai/usage 提供。
+         */
+        get: operations["get_stats_api_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stats/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export
+         * @description 把这段时间的统计导出为 Excel：概览、分时数据、分析各阶段、用时、失败原因和 AI 调用。
+         */
+        get: operations["export_api_stats_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/{kind}-services/{instance_id}": {
         parameters: {
             query?: never;
@@ -1154,6 +1202,11 @@ export interface components {
             /** Links */
             links?: string | null;
         };
+        /**
+         * Bucket
+         * @enum {string}
+         */
+        Bucket: "hour" | "day";
         /** ClusterRuleIn */
         ClusterRuleIn: {
             source: components["schemas"]["RuleSource"];
@@ -1172,10 +1225,86 @@ export interface components {
             line_limit: number;
         };
         /**
+         * Counts
+         * @description 一段时间里各环节做完了多少。重新爬取、重新下载、补跑都会再算一次。
+         */
+        Counts: {
+            /**
+             * Profile Ok
+             * @default 0
+             */
+            profile_ok: number;
+            /**
+             * Profile Failed
+             * @default 0
+             */
+            profile_failed: number;
+            /**
+             * Listing Ok
+             * @default 0
+             */
+            listing_ok: number;
+            /**
+             * Listing Failed
+             * @default 0
+             */
+            listing_failed: number;
+            /**
+             * Unreachable
+             * @default 0
+             */
+            unreachable: number;
+            /**
+             * Videos Found
+             * @default 0
+             */
+            videos_found: number;
+            /**
+             * Downloaded
+             * @default 0
+             */
+            downloaded: number;
+            /**
+             * Downloaded Bytes
+             * @default 0
+             */
+            downloaded_bytes: number;
+            /**
+             * Download Failed
+             * @default 0
+             */
+            download_failed: number;
+            /**
+             * Analyzed
+             * @default 0
+             */
+            analyzed: number;
+            /**
+             * Reused
+             * @default 0
+             */
+            reused: number;
+            /**
+             * Analysis Failed
+             * @default 0
+             */
+            analysis_failed: number;
+            /**
+             * Summarized
+             * @default 0
+             */
+            summarized: number;
+            /**
+             * Summary Failed
+             * @default 0
+             */
+            summary_failed: number;
+        };
+        /**
          * CrawlConclusion
          * @enum {string}
          */
-        CrawlConclusion: "ok" | "private" | "not_found" | "failed";
+        CrawlConclusion: "ok" | "private" | "not_found" | "login_required" | "failed";
         /** CrawlProgress */
         CrawlProgress: {
             /**
@@ -1390,6 +1519,24 @@ export interface components {
             /** Total Bytes */
             total_bytes: number | null;
         };
+        /**
+         * DurationRow
+         * @description 这段时间里做完的任务用了多久（秒）。
+         */
+        DurationRow: {
+            /** Stage */
+            stage: string;
+            /** Count */
+            count: number;
+            /** Average */
+            average: number;
+            /** Median */
+            median: number;
+            /** P90 */
+            p90: number;
+        };
+        /** @enum {string} */
+        DurationStage: "crawl" | "download" | "analysis" | "summary";
         /** EventView */
         EventView: {
             source: components["schemas"]["Source"];
@@ -1450,6 +1597,14 @@ export interface components {
             download_slots: number;
             /** Warm Slots */
             warm_slots: number;
+        };
+        /** FailureRow */
+        FailureRow: {
+            stage: components["schemas"]["DurationStage"];
+            /** Reason */
+            reason: string;
+            /** Count */
+            count: number;
         };
         /** FolderIn */
         FolderIn: {
@@ -2147,6 +2302,22 @@ export interface components {
          */
         Source: "crawler" | "analysis";
         /**
+         * StageRow
+         * @description 分析服务的一个阶段；听音按音频段计数。
+         */
+        StageRow: {
+            /** Stage */
+            stage: string;
+            /** Succeeded */
+            succeeded: number;
+            /** Failed */
+            failed: number;
+            /** Retried */
+            retried: number;
+            /** Skipped */
+            skipped: number;
+        };
+        /**
          * StageStatus
          * @enum {string}
          */
@@ -2179,6 +2350,121 @@ export interface components {
              * Format: date-time
              */
             occurred_at: string;
+        };
+        /** Stats */
+        Stats: {
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
+            /**
+             * Until
+             * Format: date-time
+             */
+            until: string;
+            bucket: components["schemas"]["Bucket"];
+            /** Batch Id */
+            batch_id: string | null;
+            totals: components["schemas"]["Counts"];
+            /** Conclusions */
+            conclusions: {
+                [key: string]: number;
+            };
+            /** Timeline */
+            timeline: components["schemas"]["TimelineRow"][];
+            /** Stages */
+            stages: components["schemas"]["StageRow"][];
+            /** Durations */
+            durations: components["schemas"]["DurationRow"][];
+            /** Failures */
+            failures: components["schemas"]["FailureRow"][];
+            /** Creators */
+            creators: {
+                [key: string]: number;
+            };
+            /** Videos */
+            videos: {
+                [key: string]: number;
+            };
+        };
+        /** TimelineRow */
+        TimelineRow: {
+            /**
+             * Profile Ok
+             * @default 0
+             */
+            profile_ok: number;
+            /**
+             * Profile Failed
+             * @default 0
+             */
+            profile_failed: number;
+            /**
+             * Listing Ok
+             * @default 0
+             */
+            listing_ok: number;
+            /**
+             * Listing Failed
+             * @default 0
+             */
+            listing_failed: number;
+            /**
+             * Unreachable
+             * @default 0
+             */
+            unreachable: number;
+            /**
+             * Videos Found
+             * @default 0
+             */
+            videos_found: number;
+            /**
+             * Downloaded
+             * @default 0
+             */
+            downloaded: number;
+            /**
+             * Downloaded Bytes
+             * @default 0
+             */
+            downloaded_bytes: number;
+            /**
+             * Download Failed
+             * @default 0
+             */
+            download_failed: number;
+            /**
+             * Analyzed
+             * @default 0
+             */
+            analyzed: number;
+            /**
+             * Reused
+             * @default 0
+             */
+            reused: number;
+            /**
+             * Analysis Failed
+             * @default 0
+             */
+            analysis_failed: number;
+            /**
+             * Summarized
+             * @default 0
+             */
+            summarized: number;
+            /**
+             * Summary Failed
+             * @default 0
+             */
+            summary_failed: number;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
         };
         /**
          * Use
@@ -4015,6 +4301,74 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": unknown;
+                };
+            };
+        };
+    };
+    get_stats_api_stats_get: {
+        parameters: {
+            query: {
+                since: string;
+                until: string;
+                bucket?: components["schemas"]["Bucket"];
+                batch_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stats"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_api_stats_export_get: {
+        parameters: {
+            query: {
+                since: string;
+                until: string;
+                bucket?: components["schemas"]["Bucket"];
+                batch_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

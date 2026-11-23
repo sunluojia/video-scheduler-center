@@ -3,10 +3,12 @@ import { useEffect } from "react";
 import { useLive } from "@/stores/live";
 
 const THROTTLE_MS = 1000;
+/** 不跟着业务数据刷新的接口：AI 配置不随业务变化；数据看板统计量大，按自己的间隔刷新。 */
+const SELF_PACED = /^\/api\/(ai\/|stats)/;
 
 /**
  * 订阅后端的数据变化：收到通知后让页面上的查询重新获取。
- * AI 配置不随业务数据变化，不刷新；断线由浏览器自动重连，重连后整体刷新一次。
+ * 断线由浏览器自动重连，重连后整体刷新一次。
  */
 export function useLiveUpdates() {
   const queryClient = useQueryClient();
@@ -19,7 +21,7 @@ export function useLiveUpdates() {
       timer ??= setTimeout(() => {
         timer = undefined;
         void queryClient.invalidateQueries({
-          predicate: (query) => !String(query.queryKey[1]).startsWith("/api/ai/"),
+          predicate: (query) => !SELF_PACED.test(String(query.queryKey[1])),
         });
       }, THROTTLE_MS);
     };

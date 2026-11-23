@@ -2,7 +2,7 @@
 
 作品从本地样例目录读取：samples/<达人账号>/ 下的 .mp4、.mov 是视频，.jpg、.png 是图文，
 按文件名排序取前几条。目录不存在时回报“找不到此达人”；目录里有 PRIVATE 文件时回报私密账号；
-有 FAIL 文件时回报爬取失败。
+有 LOGIN 文件时回报需要登录；有 FAIL 文件时回报爬取失败（读到了主页，作品列表没读成）。
 
 获取信息和下载前都按用途向调度中心申请线路，用完归还；数据仍从样例目录读取，不经代理。
 调度中心请它测试代理时，真的经代理请求回显地址（SOCKS5 需要 socksio）；请它测速时，
@@ -85,6 +85,8 @@ class FakeCrawler:
         return run
 
     def crawl_creator(self, task: dict) -> None:
+        if task["batch_id"] in self.paused:
+            raise Paused(task["batch_id"])  # 暂停采集只拦获取作品，下载照常
         if not self._take(task):
             return
         lease = self._lease(task, CRAWL, "crawled", conclusion="failed")
@@ -102,8 +104,19 @@ class FakeCrawler:
             return self._emit(task, "crawled", conclusion="not_found")
         if (folder / "PRIVATE").exists():
             return self._emit(task, "crawled", conclusion="private", profile=_profile(handle))
+        if (folder / "LOGIN").exists():
+            return self._emit(
+                task, "crawled", conclusion="login_required", profile=_profile(handle)
+            )
         if (folder / "FAIL").exists():
-            return self._emit(task, "crawled", conclusion="failed", reason="模拟的爬取失败")
+            # 主页读到了，作品列表没读成
+            return self._emit(
+                task,
+                "crawled",
+                conclusion="failed",
+                reason="第 1 次：作品列表等待响应超时",
+                profile=_profile(handle),
+            )
         files = sorted(path for path in folder.iterdir() if path.suffix.lower() in KINDS)
         works = [
             {
@@ -173,11 +186,9 @@ class FakeCrawler:
         ).raise_for_status()
 
     def _take(self, task: dict) -> bool:
-        """受理任务：重复或过期的轮次忽略，已取消的丢弃，暂停的稍后重试。"""
+        """受理任务：重复或过期的轮次忽略，已取消的丢弃。"""
         if task["batch_id"] in self.cancelled or task["task_id"] in self.cancelled:
             return False
-        if task["batch_id"] in self.paused:
-            raise Paused(task["batch_id"])
         if self.runs.get(task["task_id"], 0) >= task["run"]:
             return False
         self.runs[task["task_id"]] = task["run"]

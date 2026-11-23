@@ -26,6 +26,8 @@ class CrawlConclusion(StrEnum):
     OK = "ok"
     PRIVATE = "private"
     NOT_FOUND = "not_found"
+    LOGIN_REQUIRED = "login_required"
+    """达人开启了受众控制，要登录才能看作品。"""
     FAILED = "failed"
 
 

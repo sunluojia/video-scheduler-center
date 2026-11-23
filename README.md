@@ -66,7 +66,7 @@ pnpm api
 
 ### 模拟爬取程序
 
-`tools/fake_crawler` 按 [第 4 节的约定](docs/design.md#4-与爬取程序的约定)模拟爬取程序，只用于开发和联调。样例目录中每位达人一个子目录（目录名是账号）：`.mp4`、`.mov` 是视频，`.jpg`、`.png` 是图文，按文件名排序；子目录中放 `PRIVATE` 文件表示私密账号，放 `FAIL` 文件表示爬取失败，没有子目录表示找不到此达人。在项目根目录执行（需要设置 `SC_SERVICE_TOKEN` 环境变量）：
+`tools/fake_crawler` 按 [第 4 节的约定](docs/design.md#4-与爬取程序的约定)模拟爬取程序，只用于开发和联调。样例目录中每位达人一个子目录（目录名是账号）：`.mp4`、`.mov` 是视频，`.jpg`、`.png` 是图文，按文件名排序；子目录中放 `PRIVATE` 文件表示私密账号，放 `LOGIN` 文件表示需要登录，放 `FAIL` 文件表示爬取失败（读到了主页，作品列表没读成），没有子目录表示找不到此达人。暂停采集时只停新的达人采集，下载照常。在项目根目录执行（需要设置 `SC_SERVICE_TOKEN` 环境变量）：
 
 ```bash
 uv run --project backend python tools/fake_crawler/fake_crawler.py --samples samples --redis redis://localhost:6379/0

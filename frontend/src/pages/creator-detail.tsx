@@ -5,7 +5,7 @@ import { $api, type Schemas } from "@/api/client";
 import { Facts, Notice, PageHeader, Panel, QueryState, Section, Tags } from "@/components/page";
 import { Status, StatusOf } from "@/components/status";
 import { Button } from "@/components/ui/button";
-import { ago, dateTime } from "@/lib/format";
+import { ago, bytes, dateTime } from "@/lib/format";
 import { useDone } from "@/lib/refresh";
 import {
   conclusions,
@@ -317,6 +317,8 @@ function describe(payload: Record<string, unknown>): string {
       return `爬取结束：${conclusions[payload.conclusion as Schemas["CrawlConclusion"]]}`;
     case "download_failed":
       return "下载失败";
+    case "uploaded":
+      return `视频已上传：${bytes(Number(payload.size))}`;
     case "job":
       return `分析任务：${jobStatus[payload.status as Schemas["JobStatus"]]?.[0] ?? payload.status}`;
     case "stage": {

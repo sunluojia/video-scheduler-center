@@ -43,6 +43,13 @@
   --status-attention: oklch(0.7 0.16 70);
   --status-failed: oklch(0.56 0.2 27);
   --status-muted: oklch(0.72 0.01 85);
+
+  /* 图表系列色：按固定顺序分配给系列，已校验色盲可分辨；只表示“是哪一项”，不表示好坏 */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
 }
 
 @theme inline {
@@ -83,6 +90,11 @@
   --color-status-attention: var(--status-attention);
   --color-status-failed: var(--status-failed);
   --color-status-muted: var(--status-muted);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
 }
 
 @layer base {

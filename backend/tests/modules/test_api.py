@@ -169,8 +169,8 @@ async def test_export_downloads_the_delivery_workbook(client, database):
     assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
     assert "filename*=UTF-8''" in response.headers["content-disposition"]
     book = load_workbook(io.BytesIO(response.content))
-    assert book.sheetnames == ["成功识别", "失败账号", "重新抓取"]
-    assert book["重新抓取"]["D2"].value == "尚未爬取完成"
+    assert book.sheetnames == ["成功达人", "失败达人", "待重跑达人"]
+    assert book["待重跑达人"]["D2"].value == "尚未爬取完成"
 
 
 async def test_creator_detail_shows_the_crawled_profile(client, database):
@@ -199,15 +199,29 @@ async def test_running_batch_must_be_cancelled_before_deletion(client, database)
     assert (await client.get(f"/api/batches/{batch.id}")).status_code == 404
 
 
-async def test_pause_notifies_executors_and_reports_the_unreachable(client, database, executors):
+async def test_pausing_collection_only_notifies_the_crawler(client, database, executors):
+    """暂停采集时下载和分析照常；继续时两边都通知，解除旧版本留下的整批暂停。"""
     batch = await new_batch(database, "alice")
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL)
     await register(database, ExecutorKind.ANALYSIS, ANALYSIS_URL)
+
+    response = await client.post(f"/api/batches/{batch.id}/pause")
+
+    assert (response.json()["batch"]["status"], response.json()["warnings"]) == ("paused", [])
+    assert executors.calls("crawler.test") == [f"POST /api/batches/{batch.id}/pause"]
+    assert executors.calls("analysis.test") == []
+
+    await client.post(f"/api/batches/{batch.id}/resume")
+    assert executors.calls("analysis.test") == [f"POST /api/batches/{batch.id}/resume"]
+
+
+async def test_unreachable_executors_are_reported(client, database):
+    batch = await new_batch(database, "alice")
 
     response = await client.post(f"/api/batches/{batch.id}/pause")
 
     assert response.json()["batch"]["status"] == "paused"
     assert response.json()["warnings"] == ["爬取程序不在线"]
-    assert executors.calls("analysis.test") == [f"POST /api/batches/{batch.id}/pause"]
 
 
 async def test_pages_get_the_frontend_and_unknown_api_paths_get_404(database_url, tmp_path):
@@ -478,7 +492,10 @@ async def test_retry_is_forwarded_and_reopens_the_video(client, service, databas
     assert (await load(database, Work, job.work_id)).status == WorkStatus.ANALYZING
     detail = (await client.get(f"/api/works/{job.work_id}")).json()
     assert detail["analysis"]["status"] == "processing"
-    assert [event["payload"]["status"] for event in detail["history"]] == ["failed"]
+    history = [
+        (item["payload"]["type"], item["payload"].get("status")) for item in detail["history"]
+    ]
+    assert history == [("job", "failed"), ("uploaded", None)]  # 测试里分析事件的时间在上传之前
 
 
 async def test_ai_configuration_is_forwarded_to_the_analysis_service(client, database, executors):

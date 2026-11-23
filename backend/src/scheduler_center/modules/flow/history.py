@@ -22,7 +22,7 @@ from scheduler_center.core.common.clock import utcnow
 from scheduler_center.core.database.mapping import enum_column, metadata, reference, timestamp
 from scheduler_center.core.database.repository import Repository
 from scheduler_center.modules.analysis.messages import AnalysisEvent
-from scheduler_center.modules.crawl.messages import CrawlerEvent
+from scheduler_center.modules.crawl.messages import CrawlerEvent, Uploaded
 
 
 class Source(StrEnum):
@@ -41,7 +41,7 @@ events = Table(
     Column("type", String(32), nullable=False),
     Column("batch_id", reference("batches.id"), nullable=False, index=True),
     Column("payload", JSONB, nullable=False),
-    Column("occurred_at", timestamp(), nullable=False),
+    Column("occurred_at", timestamp(), nullable=False, index=True),  # 数据看板按时间统计
     Column("received_at", timestamp(), nullable=False),
     UniqueConstraint("source", "event_id"),
 )
@@ -49,7 +49,11 @@ events = Table(
 
 class EventLog(Repository):
     async def record(
-        self, source: Source, task_id: UUID, batch_id: UUID, event: CrawlerEvent | AnalysisEvent
+        self,
+        source: Source,
+        task_id: UUID,
+        batch_id: UUID,
+        event: CrawlerEvent | Uploaded | AnalysisEvent,
     ) -> bool:
         """保存事件；已经收到过的返回 False。"""
         stmt = (

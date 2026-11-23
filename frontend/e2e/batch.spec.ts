@@ -86,6 +86,11 @@ test("粘贴链接新建批次并进入详情", async ({ page }) => {
   await expect(page).toHaveURL(`/batches/${BATCH_ID}`);
   await expect(page.getByRole("heading", { name: "女装达人" })).toBeVisible();
   await expect(page.getByRole("cell", { name: /alice/ }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "暂停采集" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "数据看板" }).last()).toHaveAttribute(
+    "href",
+    `/stats?batch=${BATCH_ID}`,
+  );
 
   // 展开达人，直接看到每条作品的标签
   await page.getByRole("button", { name: "展开 alice 的作品" }).click();

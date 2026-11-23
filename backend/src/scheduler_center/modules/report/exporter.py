@@ -1,4 +1,4 @@
-"""交付表：成功识别、失败账号、重新抓取三张工作表。
+"""交付表：成功达人、失败达人、待重跑达人三张工作表。
 
 每位达人只出现在一张表中，按名单顺序排列；二维码图片放回原位置，ID 按文本保存，时间为北京时间。
 """
@@ -23,7 +23,8 @@ from scheduler_center.modules.batch.models import (
     WorkStatus,
 )
 
-SUCCESS, FAILED, RETRY = "成功识别", "失败账号", "重新抓取"
+SUCCESS, FAILED, RETRY = "成功达人", "失败达人", "待重跑达人"
+TOPIC_MARKS = ("#", "＃")
 PENDING_REASONS = {
     CreatorStatus.PENDING: "批次尚未开始",
     CreatorStatus.CRAWLING: "尚未爬取完成",
@@ -45,7 +46,8 @@ class CreatorResult:
 
 
 def sheet_of(result: CreatorResult) -> str:
-    """私密或找不到的进失败账号；有结论或至少一条视频成功的进成功识别；其余需要重新抓取。"""
+    """私密账号、需要登录、找不到此达人的进失败达人；有结论或至少一条视频成功的进成功达人；
+    其余（网络等原因爬取失败、视频全部失败、还没处理完）进待重跑达人。"""
     creator = result.creator
     if creator.status == CreatorStatus.FAILED:
         return FAILED
@@ -74,7 +76,7 @@ def build_workbook(results: Sequence[CreatorResult]) -> bytes:
     failed = workbook.create_sheet(FAILED)
     failed.append(["creator_oecuid", "达人名称", "二维码", "标签/原因", "采集/识别的最新时间"])
     retry = workbook.create_sheet(RETRY)
-    retry.append(["creator_oecuid", "达人名称", "二维码", "重新抓取原因", "采集/识别的最新时间"])
+    retry.append(["creator_oecuid", "达人名称", "二维码", "待重跑原因", "采集/识别的最新时间"])
     sheets = {SUCCESS: success, FAILED: failed, RETRY: retry}
     qr_rows: dict[str, set[int]] = {title: set() for title in sheets}
 
@@ -142,7 +144,9 @@ def _work_tag(work: Work) -> str:
 
 
 def _unique(tags: list[str]) -> str | None:
-    return "、".join(dict.fromkeys(tags)) or None
+    """去重；带 # 的话题排在最后，其余按出现的先后。"""
+    ordered = sorted(dict.fromkeys(tags), key=lambda tag: tag.startswith(TOPIC_MARKS))
+    return "、".join(ordered) or None
 
 
 def _style(sheet: Worksheet, header_rows: int, widths: dict[str, int]) -> None:

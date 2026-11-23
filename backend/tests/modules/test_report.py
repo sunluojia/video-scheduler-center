@@ -139,13 +139,14 @@ def test_export_puts_each_creator_in_one_sheet_in_roster_order():
     now = datetime(2026, 11, 17, 4, 0, tzinfo=UTC)
     done = creator(1, "done", CreatorStatus.COMPLETED, tags=["美妆博主"], labels=["图文作者"])
     private = creator(2, "private", CreatorStatus.FAILED, note="私密账号")
-    broken = creator(3, "broken", CreatorStatus.RECRAWL, note="爬取失败：登录失效")
+    broken = creator(3, "broken", CreatorStatus.RECRAWL, note="爬取失败：作品列表等待响应超时")
     partial = creator(4, "partial", CreatorStatus.ANALYZING)
+    locked = creator(5, "locked", CreatorStatus.FAILED, note="需要登录")
     results = [
         CreatorResult(
             done,
             [
-                work(done, 1, WorkStatus.COMPLETED, tags=["美妆", "口红"]),
+                work(done, 1, WorkStatus.COMPLETED, tags=["美妆", "#口红推荐", "口红"]),
                 work(done, 2, WorkStatus.SKIPPED, kind=WorkKind.PHOTO),
                 work(done, 3, WorkStatus.FAILED, error="下载失败：链接失效"),
             ],
@@ -153,32 +154,46 @@ def test_export_puts_each_creator_in_one_sheet_in_roster_order():
         ),
         CreatorResult(private, [], None),
         CreatorResult(broken, [], png()),
-        CreatorResult(partial, [work(partial, 1, WorkStatus.COMPLETED, tags=["穿搭"])], None),
+        CreatorResult(
+            partial,
+            [
+                work(partial, 1, WorkStatus.COMPLETED, tags=["#穿搭", "穿搭"]),
+                work(partial, 2, WorkStatus.COMPLETED, tags=["通勤", "#OOTD"]),
+            ],
+            None,
+        ),
+        CreatorResult(locked, [], None),
     ]
     for result in results:
         result.creator.updated_at = now
 
     book = load_workbook(io.BytesIO(build_workbook(results)))
 
-    success, failed, retry = book["成功识别"], book["失败账号"], book["重新抓取"]
+    assert book.sheetnames == ["成功达人", "失败达人", "待重跑达人"]
+    success, failed, retry = book["成功达人"], book["失败达人"], book["待重跑达人"]
     rows = list(success.iter_rows(min_row=3, values_only=True))
     assert [row[1] for row in rows] == ["done", "partial"]
     first = rows[0]
     assert first[0] == "7000000000000000001"
     assert first[3:9] == (
         "https://www.tiktok.com/@done/video/1",
-        "美妆、口红",
+        "美妆、#口红推荐、口红",
         "https://www.tiktok.com/@done/video/2",
         "图文作者",
         "https://www.tiktok.com/@done/video/3",
         "下载失败：链接失效",
     )
     assert first[9:13] == (None, "作品不足五条（实际 3 条）", None, "作品不足五条（实际 3 条）")
-    assert first[13:16] == ("图文作者、美妆、口红", "图文作者、美妆博主", "1")
+    assert first[13:16] == ("图文作者、美妆、口红、#口红推荐", "图文作者、美妆博主", "1")
     assert first[16] == datetime(2026, 11, 17, 12, 0)  # 北京时间
+    assert rows[1][13] == "穿搭、通勤、#穿搭、#OOTD"  # 文字去重：带 # 的话题放在最后
     assert rows[1][14] == "汇总未完成"
-    assert (failed["B2"].value, failed["D2"].value) == ("private", "私密账号")
-    assert retry["D2"].value == "爬取失败：登录失效"
+    assert [row[1:4:2] for row in failed.iter_rows(min_row=2, values_only=True)] == [
+        ("private", "私密账号"),
+        ("locked", "需要登录"),
+    ]
+    assert retry["D1"].value == "待重跑原因"
+    assert retry["D2"].value == "爬取失败：作品列表等待响应超时"
     assert (len(success._images), len(retry._images)) == (1, 1)
     assert success["A3"].number_format == "@"
 

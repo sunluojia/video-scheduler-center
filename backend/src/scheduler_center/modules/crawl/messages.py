@@ -96,3 +96,10 @@ class DownloadFailed(EventBase):
 
 type CrawlerEvent = Annotated[Accepted | Crawled | DownloadFailed, Field(discriminator="type")]
 crawler_event = TypeAdapter(CrawlerEvent)
+
+
+class Uploaded(EventBase):
+    """视频上传成功。上传走 HTTP，不经队列，调度中心收下视频时自己记一条，留作经过和统计。"""
+
+    type: Literal["uploaded"] = "uploaded"
+    size: int

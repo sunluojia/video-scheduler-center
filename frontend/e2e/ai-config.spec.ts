@@ -38,15 +38,16 @@ test("显式缓存开关保存并恢复模型设置", async ({ page }) => {
   await edit.click();
   const dialog = page.getByRole("dialog", { name: "编辑模型" });
   const cacheSwitch = dialog.getByRole("switch", { name: "显式 Prompt Cache" });
-  await expect(cacheSwitch).not.toBeChecked();
-  await cacheSwitch.press("Space");
+  // 支持的模型默认开启，只有关掉时才写进参数
   await expect(cacheSwitch).toBeChecked();
+  await cacheSwitch.press("Space");
+  await expect(cacheSwitch).not.toBeChecked();
   await dialog.getByRole("button", { name: "保存" }).click();
   await expect(row).toContainText("bailian_explicit_cache");
-  expect(model.params).toEqual({ ...generationParams, bailian_explicit_cache: true });
+  expect(model.params).toEqual({ ...generationParams, bailian_explicit_cache: false });
 
   await edit.click();
-  await expect(cacheSwitch).toBeChecked();
+  await expect(cacheSwitch).not.toBeChecked();
   await expect(dialog.getByRole("textbox", { name: "调用参数" })).not.toHaveValue(
     /bailian_explicit_cache/,
   );
@@ -55,7 +56,7 @@ test("显式缓存开关保存并恢复模型设置", async ({ page }) => {
   await expect(row).not.toContainText("bailian_explicit_cache");
   expect(model.params).toEqual(generationParams);
   await edit.click();
-  await expect(cacheSwitch).not.toBeChecked();
+  await expect(cacheSwitch).toBeChecked();
 });
 
 test("只有兼容的模型配置显示显式缓存开关", async ({ page }) => {

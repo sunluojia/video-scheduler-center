@@ -1,5 +1,6 @@
 """转发到执行程序：浏览器不直接访问爬取程序和分析服务，由后端带服务凭据调用。"""
 
+from collections.abc import Iterable
 from datetime import timedelta
 from typing import Any
 
@@ -45,18 +46,18 @@ class Gateway:
         except httpx.HTTPError as error:
             raise Unavailable(f"{executor.kind.label}无法访问：{error}") from error
 
-    async def call(self, kind: ExecutorKind, method: str, path: str) -> Any:
+    async def call(self, kind: ExecutorKind, method: str, path: str, **options) -> Any:
         """控制和查询：出错时报告原因，成功时返回 JSON 内容。"""
-        return _content(kind, await self.send(kind, method, path))
+        return _content(kind, await self.send(kind, method, path, **options))
 
     async def call_on(self, executor: Executor, method: str, path: str) -> Any:
         """同上，发给指定的实例。"""
         return _content(executor.kind, await self.request(executor, method, path))
 
-    async def broadcast(self, path: str) -> list[str]:
-        """暂停、继续、取消批次时通知两类执行程序；返回没能送达的说明。"""
+    async def broadcast(self, path: str, kinds: Iterable[ExecutorKind]) -> list[str]:
+        """暂停、继续、取消批次时通知执行程序；返回没能送达的说明。"""
         warnings = []
-        for kind in ExecutorKind:
+        for kind in kinds:
             try:
                 await self.call(kind, "POST", path)
             except (Unavailable, Rejected) as error:

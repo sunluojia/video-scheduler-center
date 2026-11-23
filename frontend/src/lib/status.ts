@@ -7,7 +7,7 @@ type Labels<T extends string> = Record<T, [label: string, tone: Tone]>;
 export const batchStatus: Labels<Schemas["BatchStatus"]> = {
   draft: ["草稿", "idle"],
   running: ["进行中", "active"],
-  paused: ["已暂停", "attention"],
+  paused: ["采集已暂停", "attention"],
   completed: ["已完成", "done"],
   cancelled: ["已取消", "muted"],
 };
@@ -98,6 +98,7 @@ export const taskStatus: Labels<Schemas["CrawlerTaskStatus"]> = {
 export const conclusions: Record<Schemas["CrawlConclusion"], string> = {
   ok: "锁定作品",
   private: "私密账号",
+  login_required: "需要登录",
   not_found: "找不到此达人",
   failed: "爬取失败",
 };

@@ -35,6 +35,7 @@ from scheduler_center.modules.proxy.lease_router import router as lease_router
 from scheduler_center.modules.proxy.router import router as proxy_router
 from scheduler_center.modules.proxy.use_router import router as proxy_use_router
 from scheduler_center.modules.report.router import router as import_router
+from scheduler_center.modules.stats.router import router as stats_router
 from scheduler_center.modules.tables import metadata  # noqa: F401  加载全部表映射
 
 VERSION = version("scheduler-center")
@@ -48,6 +49,7 @@ PAGE_ROUTERS = (
     proxy_use_router,
     identity_router,
     live_router,
+    stats_router,
 )
 SERVICE_ROUTERS = (registration, upload_router, material_router, lease_router)
 

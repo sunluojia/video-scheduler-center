@@ -15,7 +15,7 @@ type BatchRow = Schemas["BatchRow"];
 const FILTERS = [
   [undefined, "全部"],
   ["running", "进行中"],
-  ["paused", "已暂停"],
+  ["paused", "采集暂停"],
   ["completed", "已完成"],
 ] as const;
 

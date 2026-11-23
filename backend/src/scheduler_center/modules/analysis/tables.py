@@ -59,7 +59,7 @@ analysis_stages = Table(
     Column("error", Text),
     Column("retry_at", timestamp()),
     Column("started_at", timestamp()),
-    Column("occurred_at", timestamp(), nullable=False),
+    Column("occurred_at", timestamp(), nullable=False, index=True),  # 数据看板按时间统计用时
     UniqueConstraint("job_id", "run", "stage", "segment", postgresql_nulls_not_distinct=True),
 )
 

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
@@ -88,11 +88,15 @@ async def start(batch_id: UUID, database: DatabaseDep) -> BatchView:
 
 @router.post("/{batch_id}/pause")
 async def pause(batch_id: UUID, database: DatabaseDep, gateway: GatewayDep) -> BatchAction:
-    return await _control(database, gateway, batch_id, "pause", Flow.pause)
+    """暂停采集：只通知爬取程序，下载和分析照常进行。"""
+    return await _control(
+        database, gateway, batch_id, "pause", Flow.pause, kinds=[ExecutorKind.CRAWLER]
+    )
 
 
 @router.post("/{batch_id}/resume")
 async def resume(batch_id: UUID, database: DatabaseDep, gateway: GatewayDep) -> BatchAction:
+    """恢复采集。分析服务也通知一下，解除旧版本整批暂停时留下的暂停。"""
     return await _control(database, gateway, batch_id, "resume", Flow.resume)
 
 
@@ -200,9 +204,10 @@ async def _control(
     batch_id: UUID,
     action: str,
     change: Callable[[Flow, UUID], Awaitable[Batch]],
+    kinds: Sequence[ExecutorKind] = tuple(ExecutorKind),
 ) -> BatchAction:
     """先改本地状态，再通知执行程序；通知不到的返回说明，不影响本地状态。"""
     async with database.transaction() as session:
         batch = await change(Flow(session), batch_id)
-    warnings = await gateway.broadcast(f"/api/batches/{batch_id}/{action}")
+    warnings = await gateway.broadcast(f"/api/batches/{batch_id}/{action}", kinds)
     return BatchAction(batch=BatchView.model_validate(batch), warnings=warnings)

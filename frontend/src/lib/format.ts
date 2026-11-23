@@ -38,3 +38,22 @@ export function bytes(value: number): string {
   }
   return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
+
+/** 比例显示为百分比；没有分母时显示破折号。 */
+export function percent(rate: number | null | undefined, digits = 1): string {
+  return rate == null ? "—" : `${(rate * 100).toFixed(digits)}%`;
+}
+
+/** 大数字缩写：1,284 / 12.9万 / 3.4亿。 */
+export function compact(value: number): string {
+  if (value >= 1e8) return `${(value / 1e8).toFixed(1)}亿`;
+  if (value >= 1e4) return `${(value / 1e4).toFixed(1)}万`;
+  return value.toLocaleString("zh-CN");
+}
+
+/** 秒数显示为易读的时长。 */
+export function seconds(value: number): string {
+  if (value < 60) return `${value.toFixed(value < 10 ? 1 : 0)} 秒`;
+  if (value < 3600) return `${Math.floor(value / 60)} 分 ${Math.floor(value % 60)} 秒`;
+  return `${Math.floor(value / 3600)} 小时 ${Math.floor((value % 3600) / 60)} 分`;
+}

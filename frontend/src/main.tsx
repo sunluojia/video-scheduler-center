@@ -52,6 +52,10 @@ const router = createBrowserRouter([
         lazy: () => import("@/pages/work-detail").then((m) => ({ Component: m.WorkDetailPage })),
       },
       {
+        path: "stats",
+        lazy: () => import("@/pages/stats").then((m) => ({ Component: m.StatsPage })),
+      },
+      {
         path: "executors",
         lazy: () => import("@/pages/executors").then((m) => ({ Component: m.ExecutorsPage })),
       },
