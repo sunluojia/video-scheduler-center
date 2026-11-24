@@ -91,10 +91,14 @@ def build_workbook(results: Sequence[CreatorResult]) -> bytes:
             details = [creator.note or PENDING_REASONS.get(creator.status)]
         sheet.append([creator.oecuid, creator.name, None, *details, time])
         if result.qr:
-            image = Image(BytesIO(result.qr))
-            image.width = image.height = QR_PIXELS
-            sheet.add_image(image, f"C{sheet.max_row}")
-            qr_rows[sheet.title].add(sheet.max_row)
+            try:
+                image = Image(BytesIO(result.qr))
+            except OSError:  # 名单里的图片格式读不出来：写明原因，其余照常导出
+                sheet.cell(sheet.max_row, 3, "二维码无法读取")
+            else:
+                image.width = image.height = QR_PIXELS
+                sheet.add_image(image, f"C{sheet.max_row}")
+                qr_rows[sheet.title].add(sheet.max_row)
 
     _style(success, header_rows=2, widths={"A": 26, "B": 28, "C": 28, "N": 60, "O": 60, "P": 40})
     for column in "DFHJL":

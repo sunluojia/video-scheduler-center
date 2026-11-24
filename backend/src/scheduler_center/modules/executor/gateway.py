@@ -1,5 +1,6 @@
 """转发到执行程序：浏览器不直接访问爬取程序和分析服务，由后端带服务凭据调用。"""
 
+import asyncio
 from collections.abc import Iterable
 from datetime import timedelta
 from typing import Any
@@ -54,14 +55,33 @@ class Gateway:
         """同上，发给指定的实例。"""
         return _content(executor.kind, await self.request(executor, method, path))
 
+    async def online(self, kind: ExecutorKind) -> list[Executor]:
+        """该类全部在线的实例。"""
+        now = utcnow()
+        async with self._database.transaction() as session:
+            return [
+                item
+                for item in await ExecutorRepository(session).all()
+                if item.kind == kind and item.online(now, self._heartbeat_timeout)
+            ]
+
     async def broadcast(self, path: str, kinds: Iterable[ExecutorKind]) -> list[str]:
-        """暂停、继续、取消批次时通知执行程序；返回没能送达的说明。"""
+        """暂停、继续、取消批次时通知每个在线实例；返回没能送达的说明。"""
+
+        async def notify(executor: Executor) -> str | None:
+            try:
+                await self.call_on(executor, "POST", path)
+            except (Unavailable, Rejected) as error:
+                return f"{error}（{executor.instance_id}）"
+            return None
+
         warnings = []
         for kind in kinds:
-            try:
-                await self.call(kind, "POST", path)
-            except (Unavailable, Rejected) as error:
-                warnings.append(str(error))
+            targets = await self.online(kind)
+            if not targets:
+                warnings.append(f"{kind.label}不在线")
+            results = await asyncio.gather(*(notify(executor) for executor in targets))
+            warnings += [warning for warning in results if warning]
         return warnings
 
     async def aclose(self) -> None:

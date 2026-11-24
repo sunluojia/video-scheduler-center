@@ -64,9 +64,17 @@ class FakeExecutors:
         return [f"{r.method} {r.url.path}" for r in self.requests if r.url.host == host]
 
 
-async def register(database: Database, kind: ExecutorKind, url: str, seen: datetime | None = None):
+async def register(
+    database: Database,
+    kind: ExecutorKind,
+    url: str,
+    seen: datetime | None = None,
+    instance_id: str | None = None,
+):
     async with database.transaction() as session:
-        await ExecutorRepository(session).heartbeat(kind, f"{kind}-1", url, "1.0", seen or utcnow())
+        await ExecutorRepository(session).heartbeat(
+            kind, instance_id or f"{kind}-1", url, "1.0", seen or utcnow()
+        )
 
 
 async def new_batch(database: Database, *handles: str, start: bool = True) -> Batch:

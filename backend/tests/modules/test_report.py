@@ -162,7 +162,7 @@ def test_export_puts_each_creator_in_one_sheet_in_roster_order():
             ],
             None,
         ),
-        CreatorResult(locked, [], None),
+        CreatorResult(locked, [], b"not an image"),
     ]
     for result in results:
         result.creator.updated_at = now
@@ -192,6 +192,7 @@ def test_export_puts_each_creator_in_one_sheet_in_roster_order():
         ("private", "私密账号"),
         ("locked", "需要登录"),
     ]
+    assert failed["C3"].value == "二维码无法读取"
     assert retry["D1"].value == "待重跑原因"
     assert retry["D2"].value == "爬取失败：作品列表等待响应超时"
     assert (len(success._images), len(retry._images)) == (1, 1)

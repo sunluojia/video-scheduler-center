@@ -215,6 +215,19 @@ async def test_pausing_collection_only_notifies_the_crawler(client, database, ex
     assert executors.calls("analysis.test") == [f"POST /api/batches/{batch.id}/resume"]
 
 
+async def test_every_online_crawler_hears_about_the_pause(client, database, executors):
+    """多台爬取设备时每台都要通知到，否则没收到的设备会接着采集。"""
+    batch = await new_batch(database, "alice")
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL)
+    await register(database, ExecutorKind.CRAWLER, "http://crawler2.test", instance_id="c2")
+
+    response = await client.post(f"/api/batches/{batch.id}/pause")
+
+    assert response.json()["warnings"] == []
+    pause = [f"POST /api/batches/{batch.id}/pause"]
+    assert executors.calls("crawler.test") == executors.calls("crawler2.test") == pause
+
+
 async def test_unreachable_executors_are_reported(client, database):
     batch = await new_batch(database, "alice")
 

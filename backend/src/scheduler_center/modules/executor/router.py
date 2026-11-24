@@ -17,7 +17,6 @@ from pydantic import (
 
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.core.common.errors import Conflict, Unavailable
-from scheduler_center.core.database.engine import Database
 from scheduler_center.core.web.dependencies import DatabaseDep
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.gateway import Gateway
@@ -250,11 +249,9 @@ async def executor_status(kind: ExecutorKind, gateway: GatewayDep) -> Any:
 
 
 @router.get("/executors/crawler/crawl-progress")
-async def crawler_crawl_progress(
-    request: Request, database: DatabaseDep, gateway: GatewayDep
-) -> list[CrawlerCrawlView]:
+async def crawler_crawl_progress(gateway: GatewayDep) -> list[CrawlerCrawlView]:
     """汇总在线爬取设备的达人资料和作品列表获取进度。"""
-    online = await _online_crawlers(database, _heartbeat_timeout(request))
+    online = await gateway.online(ExecutorKind.CRAWLER)
 
     async def read(executor: Executor) -> CrawlerCrawlView:
         try:
@@ -268,11 +265,9 @@ async def crawler_crawl_progress(
 
 
 @router.get("/executors/crawler/download-progress")
-async def crawler_download_progress(
-    request: Request, database: DatabaseDep, gateway: GatewayDep
-) -> list[CrawlerDownloadView]:
+async def crawler_download_progress(gateway: GatewayDep) -> list[CrawlerDownloadView]:
     """汇总在线爬取设备的下载进度；一台设备暂不可用时继续显示其他设备。"""
-    online = await _online_crawlers(database, _heartbeat_timeout(request))
+    online = await gateway.online(ExecutorKind.CRAWLER)
 
     async def read(executor: Executor) -> CrawlerDownloadView:
         try:
@@ -317,16 +312,6 @@ async def ai_config(path: str, request: Request, gateway: GatewayDep) -> Respons
 
 def _heartbeat_timeout(request: Request) -> timedelta:
     return timedelta(seconds=request.app.state.settings.heartbeat_timeout_seconds)
-
-
-async def _online_crawlers(database: Database, timeout: timedelta) -> list[Executor]:
-    now = utcnow()
-    async with database.transaction() as session:
-        return [
-            item
-            for item in await ExecutorRepository(session).all()
-            if item.kind == ExecutorKind.CRAWLER and item.online(now, timeout)
-        ]
 
 
 async def _request_progress(gateway: Gateway, executor: Executor, path: str) -> httpx.Response:
