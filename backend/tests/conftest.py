@@ -44,10 +44,25 @@ def executors() -> FakeExecutors:
 
 
 @pytest.fixture
-async def app(database_url: str, database: Database, tmp_path, executors: FakeExecutors):
+def legacy_crawler_dispatch() -> bool:
+    return True
+
+
+@pytest.fixture
+async def app(
+    database_url: str,
+    database: Database,
+    tmp_path,
+    executors: FakeExecutors,
+    legacy_crawler_dispatch: bool,
+):
     """不运行 lifespan：测试不监听数据库通知。"""
     app = create_app(
-        api_settings(database_url=database_url, material_root=tmp_path / "materials"),
+        api_settings(
+            database_url=database_url,
+            material_root=tmp_path / "materials",
+            legacy_crawler_dispatch=legacy_crawler_dispatch,
+        ),
         httpx.MockTransport(executors.handle),
     )
     yield app

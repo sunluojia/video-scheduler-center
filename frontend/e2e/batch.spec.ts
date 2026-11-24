@@ -97,6 +97,177 @@ test("粘贴链接新建批次并进入详情", async ({ page }) => {
   await expect(page.getByText("碎花连衣裙")).toBeVisible();
 });
 
+test("批次排障明细独立下载为 CSV", async ({ page }) => {
+  await mockApi(page, {
+    "GET /api/batches": { items: [batch], total: 1 },
+    [`GET /api/batches/${BATCH_ID}`]: batch,
+    [`GET /api/batches/${BATCH_ID}/creators`]: { items: [creator], total: 1 },
+  });
+  await page.route(`**/api/batches/${BATCH_ID}/execution-attempts`, (route) =>
+    route.fulfill({
+      contentType: "text/csv; charset=utf-8",
+      body: "执行器,状态\ncrawler-b,succeeded",
+    }),
+  );
+
+  await page.goto(`/batches/${BATCH_ID}`);
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "执行排障明细" }).click();
+  expect((await download).suggestedFilename()).toBe("女装达人-执行排障明细.csv");
+  await expect(page.getByRole("button", { name: "导出 Excel" })).toBeEnabled();
+});
+
+test("达人与作品详情展示跨设备尝试及历史未记录", async ({ page }) => {
+  const work = creator.works[0];
+  const crawl = {
+    id: "crawl-task",
+    kind: "crawl",
+    run: 1,
+    status: "succeeded",
+    conclusion: "ok",
+    error: null,
+    published_at: now,
+    accepted_at: now,
+    finished_at: now,
+    last_started_executor_id: "crawler-a",
+    result_executor_id: null,
+  };
+  const attempt = {
+    attempt_id: "10a7bbf5-d76e-4946-8528-3e81855cea03",
+    task_id: "download-task",
+    run: 2,
+    attempt_no: 1,
+    executor_id: "crawler-a",
+    status: "expired",
+    claimed_at: now,
+    ended_at: now,
+    error: "任务租约到期",
+  };
+  const longId = `crawler-b-${"device".repeat(18)}`;
+  await mockApi(page, {
+    [`GET /api/creators/${creator.id}`]: {
+      creator,
+      batch,
+      crawl,
+      summary: null,
+      works: [work],
+      crawl_attempts: [],
+      summary_attempts: [],
+      history: [],
+    },
+    [`GET /api/works/${work.id}`]: {
+      creator,
+      work,
+      download: { ...crawl, kind: "download", run: 2, result_executor_id: longId },
+      analysis: null,
+      download_attempts: [
+        attempt,
+        {
+          ...attempt,
+          attempt_no: 2,
+          error: null,
+          status: "succeeded",
+          executor_id: longId,
+          attempt_id: "5f121bcc-6934-4849-ac02-377aec9ba8b4",
+        },
+      ],
+      analysis_attempts: [],
+      stages: [],
+      history: [],
+    },
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/creators/${creator.id}`);
+  const task = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "爬取任务" }) });
+  await expect(task.getByText("crawler-a")).toBeVisible();
+  await expect(task.getByText("历史未记录")).toBeVisible();
+  await page.getByRole("link", { name: /夏天的通勤穿搭/ }).click();
+  await expect(page.getByRole("heading", { name: "夏天的通勤穿搭" })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const attempts = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "执行尝试" }) });
+  await expect(attempts.getByText("租约过期")).toBeVisible();
+  await expect(attempts.getByText("任务租约到期")).toBeVisible();
+  await expect(attempts.getByText(longId)).toBeVisible();
+  await expect(attempts.getByText("历史未记录")).toBeVisible();
+  const name = await attempts.getByText(longId).boundingBox();
+  expect(name!.x + name!.width).toBeLessThanOrEqual(390);
+});
+
+test("导出 Excel 等待期间禁用重复点击，失败后可以重试", async ({ page }) => {
+  await mockApi(page, {
+    "GET /api/batches": { items: [batch], total: 1 },
+    "GET /api/executors": [],
+    [`GET /api/batches/${BATCH_ID}`]: batch,
+    [`GET /api/batches/${BATCH_ID}/creators`]: { items: [creator], total: 1 },
+  });
+
+  let requests = 0;
+  let finishFirstRequest!: () => void;
+  const firstRequest = new Promise<void>((resolve) => {
+    finishFirstRequest = resolve;
+  });
+  await page.route(`**/api/batches/${BATCH_ID}/export`, async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await firstRequest;
+      await route.fulfill({ status: 503, json: { detail: "暂时无法生成 Excel" } });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      body: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    });
+  });
+
+  await page.goto(`/batches/${BATCH_ID}`);
+  const button = page.getByRole("button", { name: "导出 Excel" });
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "正在生成 Excel…" })).toBeDisabled();
+  await expect(page.getByRole("status", { name: "Excel 导出进度" })).toHaveText(
+    "正在生成 Excel，大批次可能需要等待一段时间。",
+  );
+  await expect.poll(() => requests).toBe(1);
+  finishFirstRequest();
+
+  await expect(page.getByText("暂时无法生成 Excel")).toBeVisible();
+  await expect(button).toBeEnabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const downloadEvent = page.waitForEvent("download");
+  await button.click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe("女装达人-达人标签结果.xlsx");
+  expect(await download.failure()).toBeNull();
+  await expect(page.getByText("Excel 已生成，已发起下载")).toBeVisible();
+  await expect(page).toHaveURL(`/batches/${BATCH_ID}`);
+  expect(requests).toBe(2);
+});
+
+test("Excel 生成超时后提示并恢复导出按钮", async ({ page }) => {
+  await mockApi(page, {
+    "GET /api/batches": { items: [batch], total: 1 },
+    "GET /api/executors": [],
+    [`GET /api/batches/${BATCH_ID}`]: batch,
+    [`GET /api/batches/${BATCH_ID}/creators`]: { items: [creator], total: 1 },
+  });
+  await page.route(`**/api/batches/${BATCH_ID}/export`, () => {
+    // 保持请求挂起，验证界面能主动结束等待。
+  });
+  await page.clock.install();
+  await page.goto(`/batches/${BATCH_ID}`);
+  const button = page.getByRole("button", { name: "导出 Excel" });
+  await button.click();
+  await expect(page.getByRole("button", { name: "正在生成 Excel…" })).toBeDisabled();
+  await page.clock.fastForward(180_001);
+  await expect(page.getByText("生成 Excel 超时，请重试")).toBeVisible();
+  await expect(button).toBeEnabled();
+});
+
 test("达人详情显示爬取程序回传的平台资料", async ({ page }) => {
   const { works, ...view } = creator;
   const profile = {

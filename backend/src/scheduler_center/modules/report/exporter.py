@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from io import BytesIO
 
 from openpyxl import Workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 from openpyxl.drawing.image import Image
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, NamedStyle, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
 from scheduler_center.core.common.clock import BEIJING
@@ -34,6 +36,7 @@ PENDING_REASONS = {
 QR_PIXELS = 120
 QR_ROW_HEIGHT = 96  # 磅，略高于图片
 FONT = "微软雅黑"
+RED_TAG = InlineFont(rFont=FONT, sz=10, color="FFFF0000")
 BORDER = Border(*(Side(style="thin", color="AAB8C5"),) * 4)
 HEADER_FILL = PatternFill("solid", fgColor="243B53")
 
@@ -60,6 +63,7 @@ def sheet_of(result: CreatorResult) -> str:
 
 def build_workbook(results: Sequence[CreatorResult]) -> bytes:
     workbook = Workbook()
+    _register_styles(workbook)
     success = workbook.active
     success.title = SUCCESS
     work_headers = [label for n in range(1, MAX_WORKS + 1) for label in (f"作品{n}", None)]
@@ -79,6 +83,7 @@ def build_workbook(results: Sequence[CreatorResult]) -> bytes:
     retry.append(["creator_oecuid", "达人名称", "二维码", "待重跑原因", "采集/识别的最新时间"])
     sheets = {SUCCESS: success, FAILED: failed, RETRY: retry}
     qr_rows: dict[str, set[int]] = {title: set() for title in sheets}
+    last_rows = {title: sheet.max_row for title, sheet in sheets.items()}
 
     for result in results:
         creator, sheet = result.creator, sheets[sheet_of(result)]
@@ -90,15 +95,17 @@ def build_workbook(results: Sequence[CreatorResult]) -> bytes:
         else:
             details = [creator.note or PENDING_REASONS.get(creator.status)]
         sheet.append([creator.oecuid, creator.name, None, *details, time])
+        last_rows[sheet.title] += 1
         if result.qr:
+            row_number = last_rows[sheet.title]
             try:
                 image = Image(BytesIO(result.qr))
             except OSError:  # 名单里的图片格式读不出来：写明原因，其余照常导出
-                sheet.cell(sheet.max_row, 3, "二维码无法读取")
+                sheet.cell(row_number, 3, "二维码无法读取")
             else:
                 image.width = image.height = QR_PIXELS
-                sheet.add_image(image, f"C{sheet.max_row}")
-                qr_rows[sheet.title].add(sheet.max_row)
+                sheet.add_image(image, f"C{row_number}")
+                qr_rows[sheet.title].add(row_number)
 
     _style(success, header_rows=2, widths={"A": 26, "B": 28, "C": 28, "N": 60, "O": 60, "P": 40})
     for column in "DFHJL":
@@ -116,22 +123,24 @@ def build_workbook(results: Sequence[CreatorResult]) -> bytes:
     return output.getvalue()
 
 
-def _success_cells(result: CreatorResult) -> list[str | None]:
+def _success_cells(result: CreatorResult) -> list[str | CellRichText | None]:
     creator, works = result.creator, result.works
     by_position = {work.position: work for work in works}
     shortage = f"作品不足五条（实际 {len(works)} 条）" if 0 < len(works) < MAX_WORKS else None
-    cells: list[str | None] = []
+    cells: list[str | CellRichText | None] = []
     for position in range(1, MAX_WORKS + 1):
         work = by_position.get(position)
         cells += [work.url, _work_tag(work)] if work else [None, shortage]
     succeeded = [work for work in works if work.status == WorkStatus.COMPLETED]
-    text_tags = _unique(creator.labels + [tag for work in succeeded for tag in work.tags or []])
+    text_tags = creator.labels + [tag for work in succeeded for tag in work.tags or []]
+    typed_tags: dict[str, None] = {}
     if creator.status == CreatorStatus.COMPLETED:
-        typed_tags = _unique(creator.labels + (creator.tags or []))
+        typed_tags = dict.fromkeys(_summary_tags(creator.labels + (creator.tags or [])))
+        typed_text = "、".join(typed_tags) or None
     else:
-        typed_tags = creator.note or "汇总未完成"
+        typed_text = creator.note or "汇总未完成"
     ids = "\n".join(work.platform_id for work in succeeded)
-    return [*cells, text_tags, typed_tags, ids or None]
+    return [*cells, _text_tag_cell(text_tags, typed_tags), typed_text, ids or None]
 
 
 def _work_tag(work: Work) -> str:
@@ -139,7 +148,7 @@ def _work_tag(work: Work) -> str:
         case WorkStatus.SKIPPED:
             return "图文作者"
         case WorkStatus.COMPLETED:
-            return "、".join(work.tags or []) or "未识别出标签"
+            return "、".join(_without_duration(work.tags or [])) or "未识别出标签"
         case WorkStatus.DOWNLOADING | WorkStatus.ANALYZING:
             return "处理中"
         case WorkStatus.ABANDONED:
@@ -147,10 +156,65 @@ def _work_tag(work: Work) -> str:
     return work.error or "失败"
 
 
-def _unique(tags: list[str]) -> str | None:
-    """去重；带 # 的话题排在最后，其余按出现的先后。"""
-    ordered = sorted(dict.fromkeys(tags), key=lambda tag: tag.startswith(TOPIC_MARKS))
-    return "、".join(ordered) or None
+def _without_duration(tags: list[str]) -> list[str]:
+    return [tag for tag in tags if not tag.lstrip().startswith("视频时长")]
+
+
+def _summary_tags(tags: list[str]) -> list[str]:
+    return sorted(
+        dict.fromkeys(_without_duration(tags)), key=lambda tag: tag.startswith(TOPIC_MARKS)
+    )
+
+
+def _text_tag_cell(tags: list[str], typed_tags: dict[str, None]) -> str | CellRichText | None:
+    ordered = _summary_tags(tags)
+    if all(tag in typed_tags for tag in ordered):
+        return "、".join(ordered) or None
+
+    runs: list[str | TextBlock] = []
+    plain: list[str] = []
+    for index, tag in enumerate(ordered):
+        if index:
+            plain.append("、")
+        if tag in typed_tags:
+            plain.append(tag)
+        else:
+            if plain:
+                runs.append("".join(plain))
+                plain.clear()
+            runs.append(TextBlock(RED_TAG, tag))
+    if plain:
+        runs.append("".join(plain))
+    return CellRichText(runs)
+
+
+def _register_styles(workbook: Workbook) -> None:
+    """同一工作簿只注册一次样式，避免逐单元格去重。"""
+    body = dict(
+        border=BORDER,
+        font=Font(name=FONT, size=10, color="000000"),
+        alignment=Alignment(horizontal="left", vertical="top", wrap_text=True),
+    )
+    styles = (
+        NamedStyle(
+            name="导出表头",
+            border=BORDER,
+            font=Font(name=FONT, size=10, bold=True, color="FFFFFF"),
+            alignment=Alignment(horizontal="center", vertical="center", wrap_text=True),
+            fill=HEADER_FILL,
+        ),
+        NamedStyle(name="导出正文", **body),
+        NamedStyle(name="导出时间", number_format="yyyy-mm-dd hh:mm:ss", **body),
+        NamedStyle(name="导出编号", number_format="@", **body),
+        NamedStyle(
+            name="导出链接",
+            border=BORDER,
+            font=Font(name=FONT, size=10, color="0563C1", underline="single"),
+            alignment=body["alignment"],
+        ),
+    )
+    for style in styles:
+        workbook.add_named_style(style)
 
 
 def _style(sheet: Worksheet, header_rows: int, widths: dict[str, int]) -> None:
@@ -161,25 +225,17 @@ def _style(sheet: Worksheet, header_rows: int, widths: dict[str, int]) -> None:
     last = sheet.max_column
     for row in sheet.iter_rows():
         for cell in row:
-            header = cell.row <= header_rows
-            cell.border = BORDER
-            cell.font = Font(
-                name=FONT, size=10, bold=header, color="FFFFFF" if header else "000000"
-            )
-            cell.alignment = Alignment(
-                horizontal="center" if header else "left",
-                vertical="center" if header else "top",
-                wrap_text=True,
-            )
-            if header:
-                cell.fill = HEADER_FILL
+            if cell.row <= header_rows:
+                cell.style = "导出表头"
             elif cell.column == last:
-                cell.number_format = "yyyy-mm-dd hh:mm:ss"
+                cell.style = "导出时间"
             elif cell.column == 1 or (sheet.title == SUCCESS and cell.column == last - 1):
-                cell.number_format = "@"  # ID 按文本保存
+                cell.style = "导出编号"  # ID 按文本保存
             elif sheet.title == SUCCESS and isinstance(cell.value, str) and _is_link(cell.column):
                 cell.hyperlink = cell.value
-                cell.font = Font(name=FONT, size=10, color="0563C1", underline="single")
+                cell.style = "导出链接"
+            else:
+                cell.style = "导出正文"
 
 
 def _is_link(column: int) -> bool:
@@ -192,11 +248,13 @@ def _fit_rows(sheet: Worksheet, qr_rows: set[int]) -> None:
         number = row[0].row
         lines = 1
         for cell in row:
-            if isinstance(cell.value, str):
+            if isinstance(cell.value, (str, CellRichText)):
                 width = sheet.column_dimensions[cell.column_letter].width or 10
                 lines = max(
                     lines,
-                    sum(math.ceil(_units(part) / width) or 1 for part in cell.value.split("\n")),
+                    sum(
+                        math.ceil(_units(part) / width) or 1 for part in str(cell.value).split("\n")
+                    ),
                 )
         height = max(24, lines * 15 + 6)
         sheet.row_dimensions[number].height = min(

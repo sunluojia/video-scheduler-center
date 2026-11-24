@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.core.web.dependencies import DatabaseDep
+from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.live.notifier import Live
 from scheduler_center.modules.proxy.dispatcher import Dispatcher, Grant
 from scheduler_center.modules.proxy.messages import (
@@ -25,12 +26,15 @@ async def acquire(body: LeaseRequest, database: DatabaseDep) -> LeaseReply:
         result = await Dispatcher(session).acquire(
             body.device, body.use, body.task_id, set(body.avoid), utcnow()
         )
-    if isinstance(result, Grant):
-        lease = result.lease
-        grant = LeaseGrant(
-            lease_id=lease.id, line=lease.line, probe=lease.probe, route=Route.of(result)
-        )
-        return LeaseReply(lease=grant)
+        if isinstance(result, Grant):
+            lease, route = result.lease, Route.of(result)
+            if body.attempt_id is not None:
+                lease.attempt_id = body.attempt_id
+                await CrawlerAttempts(session).record_route(
+                    body.attempt_id, body.device, route.kind
+                )
+            grant = LeaseGrant(lease_id=lease.id, line=lease.line, probe=lease.probe, route=route)
+            return LeaseReply(lease=grant)
     return LeaseReply(retry_after=result.seconds, reason=result.reason)
 
 

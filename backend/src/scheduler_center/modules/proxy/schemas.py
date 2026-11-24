@@ -266,7 +266,7 @@ class RuleIn(BaseModel):
 
 class ClusterRuleIn(RuleIn):
     mode: PickMode = PickMode.PRIORITY
-    line_limit: int = Field(2, ge=1, le=20)
+    line_limit: int = Field(2, ge=1, le=40)
     """每条线路同时使用数。"""
 
     @model_validator(mode="after")

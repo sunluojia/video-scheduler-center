@@ -9,6 +9,10 @@ def get_database(request: Request) -> Database:
     return request.app.state.database
 
 
+def legacy_crawler_dispatch(request: Request) -> bool:
+    return request.app.state.settings.legacy_crawler_dispatch
+
+
 class Paging:
     """分页参数，页码从 1 开始。"""
 
@@ -22,4 +26,5 @@ class Paging:
 
 
 DatabaseDep = Annotated[Database, Depends(get_database)]
+LegacyCrawlerDispatchDep = Annotated[bool, Depends(legacy_crawler_dispatch)]
 PagingDep = Annotated[Paging, Depends()]

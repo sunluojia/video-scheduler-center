@@ -445,6 +445,7 @@ class Lease:
     detail: str | None = None
     proxy_revision: UUID | None = None
     listing_result: ListingResult | None = None
+    attempt_id: UUID | None = None
 
     def renew(self, now: datetime) -> None:
         self.expires_at = now + LEASE_TTL

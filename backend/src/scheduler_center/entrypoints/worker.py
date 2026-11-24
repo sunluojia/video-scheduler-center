@@ -12,6 +12,7 @@ from scheduler_center.core.database.engine import Database
 from scheduler_center.integrations.mq.broker import create_broker
 from scheduler_center.integrations.mq.publisher import BATCH, OutboxPublisher
 from scheduler_center.modules.batch.repository import BatchRepository
+from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.executor.gateway import Gateway
 from scheduler_center.modules.executor.models import ExecutorKind
 from scheduler_center.modules.executor.repository import ExecutorRepository
@@ -20,6 +21,7 @@ from scheduler_center.modules.flow.reconcile import (
     republish_crawler_tasks,
 )
 from scheduler_center.modules.flow.service import Flow
+from scheduler_center.modules.live.notifier import Live
 from scheduler_center.modules.material.repository import MaterialRepository
 from scheduler_center.modules.material.store import MaterialStore
 from scheduler_center.modules.proxy.repository import LeaseRepository
@@ -54,7 +56,7 @@ class Worker:
             group.create_task(_every(5, self.complete_batches))
             group.create_task(_every(5, self.test_proxies))
             group.create_task(_every(5, self.speed_test_proxies))
-            group.create_task(_every(60, self.reconcile))
+            group.create_task(_every(10, self.reconcile))
             group.create_task(_every(settings.cleanup_interval_minutes * 60, self.clean_up))
 
     async def _publish(self) -> None:
@@ -75,14 +77,17 @@ class Worker:
                 await Flow(session).complete_if_done(batch_id)
 
     async def reconcile(self) -> None:
-        """执行程序在线时，重发长时间没有受理的任务；离线时等它回来再说。"""
+        """回收过期认领；为在线的 Redis 消费方重新投递长时间未受理的任务。"""
         now = utcnow()
         before = now - timedelta(minutes=self._settings.reconcile_after_minutes)
         timeout = timedelta(seconds=self._settings.heartbeat_timeout_seconds)
-        republish = {
-            ExecutorKind.CRAWLER: republish_crawler_tasks,
-            ExecutorKind.ANALYSIS: republish_analysis_jobs,
-        }
+        async with self._database.transaction() as session:
+            if count := await CrawlerAttempts(session).expire(now):
+                await Live(session).attempts_changed()
+                log.warning("已回收 %d 个到期的爬虫任务认领", count)
+        republish = {ExecutorKind.ANALYSIS: republish_analysis_jobs}
+        if self._settings.legacy_crawler_dispatch:
+            republish[ExecutorKind.CRAWLER] = republish_crawler_tasks
         async with self._database.transaction() as session:
             executors = ExecutorRepository(session)
             for kind, action in republish.items():
@@ -103,6 +108,8 @@ class Worker:
             log.info("测速了 %d 个代理", count)
 
     async def clean_up(self) -> None:
+        if not self._settings.cleanup_enabled:
+            return
         async with self._database.transaction() as session:
             live = await MaterialRepository(session).live_ids()
             await LeaseRepository(session).purge(utcnow() - LEASE_RETENTION)
@@ -122,7 +129,9 @@ async def _every(seconds: float, job: Callable[[], Awaitable[None]]) -> None:
 
 async def run(settings: WorkerSettings) -> None:
     database = Database(settings.database_url)
-    publisher = OutboxPublisher(database, create_broker(settings))
+    publisher = OutboxPublisher(
+        database, create_broker(settings), legacy_crawler_dispatch=settings.legacy_crawler_dispatch
+    )
     timeout = timedelta(seconds=settings.heartbeat_timeout_seconds)
     gateway = Gateway(database, settings.service_token.get_secret_value(), timeout)
     try:

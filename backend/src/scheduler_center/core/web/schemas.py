@@ -10,3 +10,7 @@ class View(BaseModel):
 class Page[T](BaseModel):
     items: list[T]
     total: int
+
+
+class ErrorDetail(BaseModel):
+    detail: str

@@ -28,10 +28,20 @@ class CrawlerTaskRepository(Repository):
         return {task.work_id: task for task in await self._session.scalars(stmt)}
 
     async def cancel_batch(self, batch_id: UUID, now: datetime) -> None:
+        await self._cancel(crawler_tasks.c.batch_id == batch_id, now)
+
+    async def cancel_downloads(self, creator_id: UUID, now: datetime) -> None:
+        await self._cancel(
+            (crawler_tasks.c.creator_id == creator_id)
+            & (crawler_tasks.c.kind == CrawlerTaskKind.DOWNLOAD),
+            now,
+        )
+
+    async def _cancel(self, scope, now: datetime) -> None:
         await self._session.execute(
             update(crawler_tasks)
-            .where(crawler_tasks.c.batch_id == batch_id, crawler_tasks.c.status.in_(ACTIVE))
-            .values(status=CrawlerTaskStatus.CANCELLED, finished_at=now)
+            .where(scope, crawler_tasks.c.status.in_(ACTIVE))
+            .values(status=CrawlerTaskStatus.CANCELLED, finished_at=now, current_attempt_id=None)
         )
 
     async def unaccepted(self, before: datetime, limit: int) -> list[CrawlerTask]:

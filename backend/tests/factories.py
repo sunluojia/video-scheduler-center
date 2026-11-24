@@ -37,16 +37,29 @@ def api_settings(**values) -> ApiSettings:
     )
 
 
-def build_worker(database: Database, database_url: str, tmp_path, executors) -> Worker:
+def build_worker(
+    database: Database,
+    database_url: str,
+    tmp_path,
+    executors,
+    *,
+    legacy_crawler_dispatch: bool = True,
+) -> Worker:
     """Worker 访问执行程序时走模拟的 HTTP 接口。"""
     settings = WorkerSettings(
         database_url=database_url,
         material_root=tmp_path / "materials",
         service_token=SecretStr(SERVICE_TOKEN),
+        legacy_crawler_dispatch=legacy_crawler_dispatch,
     )
     timeout = timedelta(seconds=settings.heartbeat_timeout_seconds)
     gateway = Gateway(database, SERVICE_TOKEN, timeout, httpx.MockTransport(executors.handle))
-    return Worker(settings, database, OutboxPublisher(database, StubBroker()), gateway)
+    return Worker(
+        settings,
+        database,
+        OutboxPublisher(database, StubBroker(), legacy_crawler_dispatch=legacy_crawler_dispatch),
+        gateway,
+    )
 
 
 class FakeExecutors:
@@ -77,11 +90,13 @@ async def register(
         )
 
 
-async def new_batch(database: Database, *handles: str, start: bool = True) -> Batch:
+async def new_batch(
+    database: Database, *handles: str, start: bool = True, legacy_crawler_dispatch: bool = True
+) -> Batch:
     async with database.transaction() as session:
         batch = await create_batch(session, "测试批次", "粘贴链接", read_links("\n".join(handles)))
         if start:
-            await Flow(session).start(batch.id)
+            await Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch).start(batch.id)
     return batch
 
 
@@ -125,10 +140,18 @@ def crawler_message(task_id: str | UUID, type_: str, run=1, **fields):
     )
 
 
-async def crawler_says(database: Database, task_id: str | UUID, type_: str, run=1, **fields):
+async def crawler_says(
+    database: Database,
+    task_id: str | UUID,
+    type_: str,
+    run=1,
+    *,
+    legacy_crawler_dispatch: bool = True,
+    **fields,
+):
     event = crawler_message(task_id, type_, run, **fields)
     async with database.transaction() as session:
-        await Flow(session).on_crawler_event(event)
+        await Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch).on_crawler_event(event)
     return event
 
 

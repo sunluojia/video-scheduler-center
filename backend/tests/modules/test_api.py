@@ -264,6 +264,7 @@ async def test_executors_register_and_go_offline(client, service, database):
         "crawl_slots": 2,
         "download_slots": 4,
         "warm_slots": 1,
+        "revoked_attempts": [],
     }
     await register(database, ExecutorKind.ANALYSIS, ANALYSIS_URL, utcnow() - timedelta(minutes=5))
 

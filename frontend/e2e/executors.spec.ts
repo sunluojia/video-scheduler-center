@@ -16,6 +16,7 @@ test("登记执行程序后等待心跳，离线记录可删除", async ({ page 
     crawl_slots: 2,
     download_slots: 4,
     warm_slots: 1,
+    activity: { active: 3, completed_24h: 12, expired_24h: 1, takeovers_24h: 2 },
   };
   const existing = [crawler, { ...crawler, instance_id: "crawler-stopped", online: false }];
   await mockApi(page, {
@@ -51,6 +52,8 @@ test("登记执行程序后等待心跳，离线记录可删除", async ({ page 
   await page.goto("/executors");
   const online = page.getByRole("row", { name: /crawler-online/ });
   await expect(online.getByText("在线", { exact: true })).toBeVisible();
+  await expect(online.getByText("3 个认领")).toBeVisible();
+  await expect(online.getByText("完成 12 · 过期 1 · 接手 2")).toBeVisible();
   await expect(online.getByRole("button", { name: "删除" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "添加执行程序" }).click();

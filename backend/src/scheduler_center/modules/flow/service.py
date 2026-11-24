@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.core.common.errors import Conflict, NotFound
 from scheduler_center.core.messaging.outbox import Outbox, Route
+from scheduler_center.modules.analysis.attempts import JOB_IN_PROGRESS, JOB_STAGE, AnalysisAttempts
 from scheduler_center.modules.analysis.messages import (
     ANALYZE_VIDEO,
     SUMMARIZE_CREATOR,
@@ -27,8 +28,10 @@ from scheduler_center.modules.analysis.messages import (
     SummarizeCreator,
 )
 from scheduler_center.modules.analysis.models import (
+    JOB_ENDED,
     AnalysisJob,
     AnalysisStage,
+    AnalysisStageAttempt,
     JobKind,
     JobStatus,
     StageStatus,
@@ -49,6 +52,7 @@ from scheduler_center.modules.batch.repository import (
     CreatorRepository,
     WorkRepository,
 )
+from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.crawl.messages import (
     CRAWL_CREATOR,
     DOWNLOAD_VIDEO,
@@ -63,9 +67,14 @@ from scheduler_center.modules.crawl.messages import (
     WorkRef,
 )
 from scheduler_center.modules.crawl.models import (
+    AttemptRef,
     CrawlConclusion,
+    CrawlerAttemptStatus,
+    CrawlerRunKind,
     CrawlerTask,
+    CrawlerTaskAttempt,
     CrawlerTaskKind,
+    CrawlerTaskRun,
     CrawlerTaskStatus,
 )
 from scheduler_center.modules.crawl.repository import CrawlerTaskRepository
@@ -97,12 +106,15 @@ REDO = (WorkStatus.COMPLETED, WorkStatus.FAILED, WorkStatus.NEEDS_REVIEW, WorkSt
 
 
 class Flow:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, legacy_crawler_dispatch: bool = False) -> None:
         self._batches = BatchRepository(session)
         self._creators = CreatorRepository(session)
         self._works = WorkRepository(session)
         self._tasks = CrawlerTaskRepository(session)
+        self._attempts = CrawlerAttempts(session)
+        self._legacy_crawler_dispatch = legacy_crawler_dispatch
         self._jobs = AnalysisJobRepository(session)
+        self._analysis_attempts = AnalysisAttempts(session)
         self._materials = MaterialRepository(session)
         self._outbox = Outbox(session)
         self._events = EventLog(session)
@@ -143,6 +155,7 @@ class Flow:
         batch.cancel(now)
         await self._creators.of_batch(batch.id, lock=True)  # 等正在处理的事件结束
         await self._tasks.cancel_batch(batch.id, now)
+        await self._attempts.cancel_batch(batch.id, now)
         await self._jobs.cancel_batch(batch.id, now)
         await self._outbox.withdraw(batch.id)
         await self._materials.discard_for_batch(batch.id, now)
@@ -180,21 +193,46 @@ class Flow:
     async def on_crawler_event(self, event: CrawlerEvent) -> None:
         task = await self._tasks.get(CrawlerTask, event.task_id)
         if task is None:
-            log.warning("爬取程序的事件没有对应的任务，忽略：%s", event.task_id)
+            run = await self._attempts.get(CrawlerTaskRun, (event.task_id, event.run))
+            if run is not None:
+                await self._events.record(Source.CRAWLER, event.task_id, run.batch_id, event)
+            else:
+                log.warning("爬取程序的事件没有对应的任务，忽略：%s", event.task_id)
             return
         creator = await self._creators.require(Creator, task.creator_id, lock=True)
         if not await self._events.record(Source.CRAWLER, task.id, task.batch_id, event):
             return
-        task = await self._tasks.require(CrawlerTask, task.id, lock=True)
-        if event.run != task.run or not task.active:
+        task = await self._tasks.get(CrawlerTask, task.id, lock=True)
+        if task is None or event.run != task.run or not task.active:
             return  # 旧轮次或已结束的任务，只记入历史
+        attempt = None
+        if event.attempt_id is not None:
+            attempt = await self._attempts.current(
+                task, event.attempt_id, event.executor_id, event.executor_session_id, lock=True
+            )
+            if attempt is None:
+                return
+        elif await self._attempts.was_claimed(task):
+            return  # 此轮由 PostgreSQL 认领，旧消息不再有权提交结果
         now = utcnow()
         match event:
             case Accepted():
                 task.accept(now)
-            case Crawled():
+                if attempt is not None:
+                    attempt.status = CrawlerAttemptStatus.RUNNING
+            case Crawled() if task.kind == CrawlerTaskKind.CRAWL:
+                await self._attempts.finish(
+                    task,
+                    attempt,
+                    succeeded=event.conclusion != CrawlConclusion.FAILED,
+                    now=now,
+                    error=event.reason,
+                )
                 await self._crawled(task, creator, event, now)
-            case DownloadFailed():
+            case DownloadFailed() if task.kind == CrawlerTaskKind.DOWNLOAD:
+                await self._attempts.finish(
+                    task, attempt, succeeded=False, now=now, error=event.reason
+                )
                 task.finish(CrawlerTaskStatus.FAILED, now, event.reason)
                 work = await self._works.require(Work, task.work_id)
                 work.settle(WorkStatus.FAILED, now, f"下载失败：{event.reason}")
@@ -233,52 +271,113 @@ class Flow:
                     await self._download(creator, work, None, now)
             creator.crawled(works, now)
 
-    async def check_upload(self, task_id: UUID, run: int, sha256: str) -> bool:
+    async def check_upload(
+        self, task_id: UUID, run: int, sha256: str, attempt_ref: AttemptRef | None = None
+    ) -> bool:
         """接收视频之前检查；返回 True 表示这一轮已经上传过相同内容。"""
-        task = await self._download_task(task_id)
-        return await self._uploaded_before(task, run, sha256)
+        task = await self._download_task(task_id, attempt_ref)
+        uploaded, _ = await self._authorize_upload(task, run, sha256, attempt_ref)
+        return uploaded
 
     async def upload(
-        self, task_id: UUID, run: int, material_id: UUID, size: int, sha256: str
+        self,
+        task_id: UUID,
+        run: int,
+        material_id: UUID,
+        size: int,
+        sha256: str,
+        attempt_ref: AttemptRef | None = None,
     ) -> bool:
         """登记上传的视频并提交分析；返回 False 表示相同内容已经上传过，文件不再需要。"""
-        task = await self._download_task(task_id)
+        task = await self._download_task(task_id, attempt_ref)
         creator = await self._creators.require(Creator, task.creator_id, lock=True)
-        task = await self._tasks.require(CrawlerTask, task.id, lock=True)
-        if await self._uploaded_before(task, run, sha256):
+        task = await self._download_task(task_id, attempt_ref, lock=True)
+        uploaded_before, attempt = await self._authorize_upload(
+            task, run, sha256, attempt_ref, lock=True
+        )
+        if uploaded_before:
             return False
         now = utcnow()
         work = await self._works.require(Work, task.work_id)
-        material = Material(work.id, size, sha256, material_id)
+        material = Material(
+            work.id,
+            size,
+            sha256,
+            material_id,
+            source_attempt_id=attempt.attempt_id if attempt else None,
+            source_executor_id=attempt.executor_id if attempt else None,
+        )
         self._materials.add(material)
         uploaded = Uploaded(
-            event_id=material.id, task_id=task.id, run=run, occurred_at=now, size=size
+            event_id=material.id,
+            task_id=task.id,
+            run=run,
+            occurred_at=now,
+            size=size,
+            executor_id=attempt.executor_id if attempt else None,
+            executor_session_id=attempt.executor_session_id if attempt else None,
+            attempt_id=attempt.attempt_id if attempt else None,
         )
         await self._events.record(Source.CRAWLER, task.id, task.batch_id, uploaded)
+        await self._attempts.finish(task, attempt, succeeded=True, now=now)
         task.finish(CrawlerTaskStatus.SUCCEEDED, now)
         await self._analyze(creator, work, material, now)
         await self._settle(creator, now)
         await self._live.changed(creator.batch_id, creator.id)
         return True
 
-    async def _download_task(self, task_id: UUID) -> CrawlerTask:
-        task = await self._tasks.get(CrawlerTask, task_id)
+    async def _download_task(
+        self, task_id: UUID, attempt_ref: AttemptRef | None, *, lock: bool = False
+    ) -> CrawlerTask:
+        task = await self._tasks.get(CrawlerTask, task_id, lock=lock)
         if task is None or task.kind != CrawlerTaskKind.DOWNLOAD:
+            if attempt_ref is not None:
+                raise Conflict("下载任务认领已失效")
             raise NotFound(f"下载任务 {task_id} 不存在")
         return task
 
-    async def _uploaded_before(self, task: CrawlerTask, run: int, sha256: str) -> bool:
+    async def _authorize_upload(
+        self,
+        task: CrawlerTask,
+        run: int,
+        sha256: str,
+        attempt_ref: AttemptRef | None,
+        *,
+        lock: bool = False,
+    ) -> tuple[bool, CrawlerTaskAttempt | None]:
         if run != task.run or task.status == CrawlerTaskStatus.CANCELLED:
             raise Conflict("下载任务已取消，或已有更新的轮次")
         if task.status == CrawlerTaskStatus.FAILED:
             raise Conflict("下载任务已经报告失败")
-        if task.status != CrawlerTaskStatus.SUCCEEDED:
-            return False
+        if attempt_ref is None and await self._attempts.was_claimed(task):
+            raise Conflict("此轮下载需要有效的任务认领")
+        if task.active:
+            if attempt_ref is None:
+                return False, None
+            attempt = await self._attempts.current(
+                task,
+                attempt_ref.attempt_id,
+                attempt_ref.executor_id,
+                attempt_ref.executor_session_id,
+                lock=lock,
+            )
+            if attempt is None:
+                raise Conflict("下载任务认领已失效或不属于此执行器会话")
+            return False, attempt
         work = await self._works.require(Work, task.work_id)
         material = work.material_id and await self._materials.get(Material, work.material_id)
-        if material and material.sha256 == sha256:
-            return True
-        raise Conflict("这一轮已经上传过其他内容")
+        if not material or material.sha256 != sha256:
+            raise Conflict("这一轮已经上传过其他内容")
+        if attempt_ref is not None:
+            attempt = await self._attempts.get(CrawlerTaskAttempt, attempt_ref.attempt_id)
+            if (
+                material.source_attempt_id != attempt_ref.attempt_id
+                or attempt is None
+                or attempt.executor_id != attempt_ref.executor_id
+                or attempt.executor_session_id != attempt_ref.executor_session_id
+            ):
+                raise Conflict("这一轮已由其他任务认领上传")
+        return True, None
 
     # 分析服务
 
@@ -290,15 +389,29 @@ class Flow:
         creator = await self._creators.require(Creator, job.creator_id, lock=True)
         if not await self._events.record(Source.ANALYSIS, job.id, job.batch_id, event):
             return
-        job = await self._jobs.require(AnalysisJob, job.id, lock=True)
-        if event.run != job.run:
+        job = await self._jobs.get(AnalysisJob, job.id, lock=True)
+        if job is None:
             return
+        attempt = None
+        if event.attempt_id is not None:
+            attempt = await self._analysis_attempts.record(job, event, event.attempt_id)
+            if attempt is None:
+                return
+        if event.run != job.run or job.status in JOB_ENDED:
+            return
+        executor_id = event.executor_id or (attempt and attempt.executor_id)
         now = utcnow()
         match event:
             case StageEvent():
-                await self._stage(job, event)
+                generation = attempt.retry_generation if attempt else event.retry_generation or 0
+                if not await self._stage(job, event, generation, executor_id):
+                    return
+                job.observe_executor(executor_id, event.occurred_at)
                 job.processing()
             case JobEvent():
+                stage_attempt = attempt if attempt and attempt.stage != JOB_STAGE else None
+                if not await self._current_analysis_result(job, event, stage_attempt):
+                    return
                 adopted = job.follow(
                     event.status,
                     event.occurred_at,
@@ -308,20 +421,59 @@ class Flow:
                     artifacts_until=event.artifacts_until,
                 )
                 if adopted:  # 没采纳的旧事件不改动作品，以免覆盖之后的重新下载结果
+                    if stage_attempt is None and event.retry_generation is not None:
+                        job.retry_generation = event.retry_generation
+                    job.observe_executor(executor_id, event.occurred_at)
+                    if event.status != JobStatus.ACCEPTED:
+                        job.result_executor_id = (
+                            None if event.status in JOB_IN_PROGRESS else executor_id
+                        )
                     await self._job_changed(creator, job, now)
         await self._live.changed(creator.batch_id, creator.id)
 
-    async def _stage(self, job: AnalysisJob, event: StageEvent) -> None:
+    async def _current_analysis_result(
+        self, job: AnalysisJob, event: JobEvent, stage_attempt: AnalysisStageAttempt | None
+    ) -> bool:
+        if stage_attempt is not None:
+            stage = await self._jobs.stage(
+                job.id, job.run, stage_attempt.stage, stage_attempt.segment
+            )
+            return stage is None or (stage.retry_generation or 0, stage.attempt) <= (
+                stage_attempt.retry_generation,
+                stage_attempt.attempt_no,
+            )
+        return event.retry_generation is None or event.retry_generation >= (
+            job.retry_generation or 0
+        )
+
+    async def _stage(
+        self, job: AnalysisJob, event: StageEvent, generation: int, executor_id: str | None
+    ) -> bool:
         stage = await self._jobs.stage(job.id, event.run, event.stage, event.segment)
         if stage is None:
             stage = AnalysisStage(
                 job.id, event.run, event.stage, event.segment, event.status, event.occurred_at
             )
             self._jobs.add(stage)
-        elif event.occurred_at < stage.occurred_at:
-            return
+        else:
+            previous = (stage.retry_generation or 0, stage.attempt)
+            incoming = (generation, event.attempt)
+            if incoming < previous:
+                return False
+            if incoming == previous and event.occurred_at < stage.occurred_at:
+                if event.status == StageStatus.STARTED and stage.started_at is None:
+                    stage.started_at = event.occurred_at
+                    return True
+                return False
+            if incoming > previous:
+                stage.started_at = stage.last_executor_id = stage.result_executor_id = None
         if event.status == StageStatus.STARTED:
             stage.started_at = event.occurred_at
+        else:
+            stage.result_executor_id = executor_id
+        if executor_id:
+            stage.last_executor_id = executor_id
+        stage.retry_generation = generation
         stage.status, stage.occurred_at, stage.attempt = (
             event.status,
             event.occurred_at,
@@ -329,6 +481,7 @@ class Flow:
         )
         stage.model, stage.prompt_version = event.model, event.prompt_version
         stage.result, stage.error, stage.retry_at = event.result, event.error, event.retry_at
+        return True
 
     async def _job_changed(self, creator: Creator, job: AnalysisJob, now: datetime) -> None:
         if job.kind == JobKind.VIDEO:
@@ -357,6 +510,7 @@ class Flow:
             job = await self._jobs.require(AnalysisJob, job.id, lock=True)
             state = reopened[job.id]
             if state.run == job.run and job.follow(JobStatus.PROCESSING, state.occurred_at):
+                job.result_executor_id = None
                 await self._job_changed(creator, job, now)
         await self._live.changed(batch.id)
 
@@ -446,6 +600,8 @@ class Flow:
 
     async def _recrawl(self, batch: Batch, creator: Creator, now: datetime) -> None:
         """重新爬取：上一轮的作品连同下载、分析记录一起删除，以新锁定的作品为准。"""
+        await self._tasks.cancel_downloads(creator.id, now)
+        await self._attempts.cancel_downloads(creator.id, now)
         await self._works.remove_of_creator(creator.id)
         await self._crawl(batch, creator, await self._tasks.crawl_task(creator.id), now)
 
@@ -456,7 +612,7 @@ class Flow:
             task = CrawlerTask(CrawlerTaskKind.CRAWL, batch.id, creator.id, {})
             self._tasks.add(task)
         else:
-            task.republish(now)
+            task = await self._attempts.rollover(task, now)
         message = CrawlCreator(
             task_id=task.id,
             run=task.run,
@@ -474,7 +630,7 @@ class Flow:
             task = CrawlerTask(CrawlerTaskKind.DOWNLOAD, creator.batch_id, creator.id, {}, work.id)
             self._tasks.add(task)
         else:
-            task.republish(now)
+            task = await self._attempts.rollover(task, now)
         message = DownloadVideo(
             task_id=task.id,
             run=task.run,
@@ -561,6 +717,23 @@ class Flow:
         self, target: CrawlerTask | AnalysisJob, route: Route, message: BaseModel
     ) -> None:
         target.message = message.model_dump(mode="json")
+        if isinstance(target, CrawlerTask):
+            self._attempts.add(
+                CrawlerTaskRun(
+                    target.id,
+                    target.run,
+                    target.batch_id,
+                    target.creator_id,
+                    message.work.work_id if isinstance(message, DownloadVideo) else None,
+                    CrawlerRunKind(route.actor),
+                    target.message,
+                    next_eligible_at=target.published_at,
+                    created_at=target.published_at,
+                    updated_at=target.published_at,
+                )
+            )
+            if not self._legacy_crawler_dispatch:
+                return
         await self._outbox.put(route, target.message)
 
     async def _discard_material(self, work: Work, now: datetime) -> None:

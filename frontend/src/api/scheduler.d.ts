@@ -194,6 +194,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/batches/{batch_id}/execution-attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Execution Attempts
+         * @description 导出本批次爬取、下载和分析的执行排障明细。
+         */
+        get: operations["export_execution_attempts_api_batches__batch_id__execution_attempts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/creators/{creator_id}": {
         parameters: {
             query?: never;
@@ -1023,6 +1043,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/crawler-tasks/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Tasks
+         * @description 按设备剩余槽位原子认领可执行任务，租期 90 秒。
+         */
+        post: operations["claim_tasks_api_crawler_tasks_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/crawler-tasks/attempts/{attempt_id}/defer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Defer Task
+         * @description 结束当前认领，延迟后可由任意设备重新认领。
+         */
+        post: operations["defer_task_api_crawler_tasks_attempts__attempt_id__defer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/download-tasks/{task_id}/runs/{run}/video": {
         parameters: {
             query?: never;
@@ -1035,7 +1095,7 @@ export interface paths {
          * Upload
          * @description 爬取程序上传下载好的视频，校验大小和 SHA-256 后登记并提交分析。
          *
-         *     相同内容重复上传直接成功；任务已取消或已有更新的轮次返回 409，大小或摘要不一致返回 422。
+         *     同一认领重复上传相同内容直接成功；认领已失效返回 409，大小或摘要不一致返回 422。
          */
         put: operations["upload_api_download_tasks__task_id__runs__run__video_put"];
         post?: never;
@@ -1113,6 +1173,43 @@ export interface components {
         Affected: {
             /** Count */
             count: number;
+        };
+        /** AnalysisAttemptView */
+        AnalysisAttemptView: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Run */
+            run: number;
+            /** Retry Generation */
+            retry_generation: number;
+            /** Stage */
+            stage: string;
+            /** Segment */
+            segment: number | null;
+            /** Attempt No */
+            attempt_no: number;
+            /** Executor Id */
+            executor_id: string | null;
+            /** Executor Session Id */
+            executor_session_id: string | null;
+            /** Status */
+            status: string;
+            /** Started At */
+            started_at: string | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Error */
+            error: string | null;
+            /** Model */
+            model: string | null;
         };
         /** BatchAction */
         BatchAction: {
@@ -1207,6 +1304,66 @@ export interface components {
          * @enum {string}
          */
         Bucket: "hour" | "day";
+        /** ClaimKinds */
+        ClaimKinds: {
+            /**
+             * Crawl Creator
+             * @default 0
+             */
+            crawl_creator: number;
+            /**
+             * Download Video
+             * @default 0
+             */
+            download_video: number;
+        };
+        /** ClaimReply */
+        ClaimReply: {
+            /** Tasks */
+            tasks: components["schemas"]["ClaimedTask"][];
+        };
+        /** ClaimRequest */
+        ClaimRequest: {
+            /** Executor Id */
+            executor_id: string;
+            /**
+             * Executor Session Id
+             * Format: uuid
+             */
+            executor_session_id: string;
+            kinds: components["schemas"]["ClaimKinds"];
+        };
+        /** ClaimedTask */
+        ClaimedTask: {
+            kind: components["schemas"]["CrawlerRunKind"];
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Run */
+            run: number;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Attempt No */
+            attempt_no: number;
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /** Attempts */
+            attempts: number;
+            /** Avoid */
+            avoid: string[];
+            /** History */
+            history: string[];
+            /** Body */
+            body: components["schemas"]["CrawlCreator"] | components["schemas"]["DownloadVideo"];
+        };
         /** ClusterRuleIn */
         ClusterRuleIn: {
             source: components["schemas"]["RuleSource"];
@@ -1305,6 +1462,32 @@ export interface components {
          * @enum {string}
          */
         CrawlConclusion: "ok" | "private" | "not_found" | "login_required" | "failed";
+        /** CrawlCreator */
+        CrawlCreator: {
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Run */
+            run: number;
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            creator: components["schemas"]["CreatorRef"];
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /**
+             * Max Works
+             * @default 5
+             */
+            max_works: number;
+        };
         /** CrawlProgress */
         CrawlProgress: {
             /**
@@ -1340,6 +1523,52 @@ export interface components {
             /** Platform User Id */
             platform_user_id?: string | null;
         };
+        /**
+         * CrawlerAttemptStatus
+         * @enum {string}
+         */
+        CrawlerAttemptStatus: "leased" | "running" | "deferred" | "succeeded" | "failed" | "cancelled" | "expired";
+        /** CrawlerAttemptView */
+        CrawlerAttemptView: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Run */
+            run: number;
+            /** Attempt No */
+            attempt_no: number;
+            /** Executor Id */
+            executor_id: string;
+            /**
+             * Executor Session Id
+             * Format: uuid
+             */
+            executor_session_id: string;
+            status: components["schemas"]["CrawlerAttemptStatus"];
+            /**
+             * Claimed At
+             * Format: date-time
+             */
+            claimed_at: string;
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /** Ended At */
+            ended_at: string | null;
+            /** Error */
+            error: string | null;
+            /** Route Kind */
+            route_kind: string | null;
+        };
         /** CrawlerCrawlView */
         CrawlerCrawlView: {
             /** Instance Id */
@@ -1356,6 +1585,11 @@ export interface components {
             /** Download Bytes Per Second */
             download_bytes_per_second?: number | null;
         };
+        /**
+         * CrawlerRunKind
+         * @enum {string}
+         */
+        CrawlerRunKind: "crawl_creator" | "download_video";
         /**
          * CrawlerTaskKind
          * @enum {string}
@@ -1389,6 +1623,12 @@ export interface components {
             accepted_at: string | null;
             /** Finished At */
             finished_at: string | null;
+            /** Current Attempt Id */
+            current_attempt_id: string | null;
+            /** Last Started Executor Id */
+            last_started_executor_id: string | null;
+            /** Result Executor Id */
+            result_executor_id: string | null;
         };
         /** CreatorDetail */
         CreatorDetail: {
@@ -1398,6 +1638,10 @@ export interface components {
             /** Works */
             works: components["schemas"]["WorkView"][];
             summary: components["schemas"]["JobView"] | null;
+            /** Crawl Attempts */
+            crawl_attempts: components["schemas"]["CrawlerAttemptView"][];
+            /** Summary Attempts */
+            summary_attempts: components["schemas"]["AnalysisAttemptView"][];
             /** History */
             history: components["schemas"]["EventView"][];
         };
@@ -1407,6 +1651,13 @@ export interface components {
          * @enum {string}
          */
         CreatorProgress: "pending" | "crawling" | "downloading" | "audio_analysis" | "video_analysis" | "summarizing" | "completed" | "failed" | "recrawl" | "invalid";
+        /** CreatorRef */
+        CreatorRef: {
+            /** Handle */
+            handle: string;
+            /** Oecuid */
+            oecuid: string | null;
+        };
         /** CreatorRow */
         CreatorRow: {
             /**
@@ -1487,6 +1738,27 @@ export interface components {
              */
             updated_at: string;
         };
+        /** DeferRequest */
+        DeferRequest: {
+            /** Executor Id */
+            executor_id: string;
+            /**
+             * Executor Session Id
+             * Format: uuid
+             */
+            executor_session_id: string;
+            /** Retry After */
+            retry_after: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Consume Attempt
+             * @default false
+             */
+            consume_attempt: boolean;
+            /** Avoid Line */
+            avoid_line?: string | null;
+        };
         /** DeviceRow */
         DeviceRow: {
             /** Instance Id */
@@ -1519,6 +1791,23 @@ export interface components {
             /** Total Bytes */
             total_bytes: number | null;
         };
+        /** DownloadVideo */
+        DownloadVideo: {
+            /**
+             * Task Id
+             * Format: uuid
+             */
+            task_id: string;
+            /** Run */
+            run: number;
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            creator: components["schemas"]["CreatorRef"];
+            work: components["schemas"]["WorkRef"];
+        };
         /**
          * DurationRow
          * @description 这段时间里做完的任务用了多久（秒）。
@@ -1537,6 +1826,11 @@ export interface components {
         };
         /** @enum {string} */
         DurationStage: "crawl" | "download" | "analysis" | "summary";
+        /** ErrorDetail */
+        ErrorDetail: {
+            /** Detail */
+            detail: string;
+        };
         /** EventView */
         EventView: {
             source: components["schemas"]["Source"];
@@ -1554,6 +1848,35 @@ export interface components {
              * Format: date-time
              */
             received_at: string;
+            /** Executor Id */
+            executor_id: string | null;
+            /** Executor Session Id */
+            executor_session_id: string | null;
+            /** Attempt Id */
+            attempt_id: string | null;
+        };
+        /** ExecutorActivity */
+        ExecutorActivity: {
+            /**
+             * Active
+             * @default 0
+             */
+            active: number;
+            /**
+             * Completed 24H
+             * @default 0
+             */
+            completed_24h: number;
+            /**
+             * Expired 24H
+             * @default 0
+             */
+            expired_24h: number;
+            /**
+             * Takeovers 24H
+             * @default 0
+             */
+            takeovers_24h: number;
         };
         /** ExecutorIn */
         ExecutorIn: {
@@ -1597,6 +1920,7 @@ export interface components {
             download_slots: number;
             /** Warm Slots */
             warm_slots: number;
+            activity?: components["schemas"]["ExecutorActivity"];
         };
         /** FailureRow */
         FailureRow: {
@@ -1823,6 +2147,10 @@ export interface components {
             accepted_at: string | null;
             /** Finished At */
             finished_at: string | null;
+            /** Last Executor Id */
+            last_executor_id: string | null;
+            /** Result Executor Id */
+            result_executor_id: string | null;
         };
         /** LeaseGrant */
         LeaseGrant: {
@@ -1855,6 +2183,8 @@ export interface components {
             use: components["schemas"]["Use"];
             /** Task Id */
             task_id?: string | null;
+            /** Attempt Id */
+            attempt_id?: string | null;
             /** Avoid */
             avoid?: string[];
         };
@@ -2151,6 +2481,13 @@ export interface components {
             version: string;
             /** Leases */
             leases?: string[];
+            /** Executor Session Id */
+            executor_session_id?: string | null;
+            /**
+             * Task Attempts
+             * @description 只续租本次上报且仍有效的任务认领 ID。
+             */
+            task_attempts?: string[];
             identities?: components["schemas"]["IdentitySnapshot"] | null;
         };
         /** RegistrationReply */
@@ -2163,6 +2500,11 @@ export interface components {
             download_slots?: number | null;
             /** Warm Slots */
             warm_slots?: number | null;
+            /**
+             * Revoked Attempts
+             * @description 本次上报但已失效的任务认领 ID。
+             */
+            revoked_attempts?: string[];
         };
         /**
          * Retag
@@ -2350,6 +2692,10 @@ export interface components {
              * Format: date-time
              */
             occurred_at: string;
+            /** Last Executor Id */
+            last_executor_id: string | null;
+            /** Result Executor Id */
+            result_executor_id: string | null;
         };
         /** Stats */
         Stats: {
@@ -2522,6 +2868,10 @@ export interface components {
             creator: components["schemas"]["CreatorView"];
             download: components["schemas"]["CrawlerTaskView"] | null;
             analysis: components["schemas"]["JobView"] | null;
+            /** Download Attempts */
+            download_attempts: components["schemas"]["CrawlerAttemptView"][];
+            /** Analysis Attempts */
+            analysis_attempts: components["schemas"]["AnalysisAttemptView"][];
             /** Stages */
             stages: components["schemas"]["StageView"][];
             /** History */
@@ -2532,6 +2882,13 @@ export interface components {
          * @enum {string}
          */
         WorkKind: "video" | "photo";
+        /** WorkRef */
+        WorkRef: {
+            /** Work Id */
+            work_id: string;
+            /** Url */
+            url: string;
+        };
         /** WorkRow */
         WorkRow: {
             work: components["schemas"]["WorkView"];
@@ -2959,7 +3316,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_execution_attempts_api_batches__batch_id__execution_attempts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             /** @description Validation Error */
@@ -4439,12 +4827,99 @@ export interface operations {
             };
         };
     };
+    claim_tasks_api_crawler_tasks_claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimReply"];
+                };
+            };
+            /** @description 当前使用旧版 Redis 派单 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    defer_task_api_crawler_tasks_attempts__attempt_id__defer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeferRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 认领已失效或不属于该执行器会话 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_api_download_tasks__task_id__runs__run__video_put: {
         parameters: {
             query?: never;
             header: {
                 "content-length": number;
                 "X-Content-SHA256": string;
+                "X-Attempt-ID"?: string | null;
+                "X-Executor-ID"?: string | null;
+                "X-Executor-Session-ID"?: string | null;
             };
             path: {
                 task_id: string;
@@ -4460,6 +4935,24 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description 旧版上传请求的任务不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
+            };
+            /** @description 认领、轮次或已保存的文件与请求不符 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDetail"];
+                };
             };
             /** @description Validation Error */
             422: {

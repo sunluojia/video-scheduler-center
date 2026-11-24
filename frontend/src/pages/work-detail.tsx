@@ -1,6 +1,7 @@
 import { Ban, Download, ExternalLink, RotateCcw, Sparkles } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { $api, type AnalysisSchemas, type Schemas } from "@/api/client";
+import { AttemptHistory, ExecutorAttribution } from "@/components/attempt-history";
 import { Confirm } from "@/components/confirm";
 import { Facts, Notice, PageHeader, Panel, QueryState, Section, Tags } from "@/components/page";
 import { Status, StatusOf } from "@/components/status";
@@ -68,7 +69,16 @@ export function WorkDetailPage() {
 
   return (
     <QueryState query={detail} rows={8}>
-      {({ work, creator, download, analysis, stages, history }) => {
+      {({
+        work,
+        creator,
+        download,
+        analysis,
+        download_attempts,
+        analysis_attempts,
+        stages,
+        history,
+      }) => {
         const result = analysis?.result as {
           recognition?: Recognition;
           listening?: Listening;
@@ -152,12 +162,24 @@ export function WorkDetailPage() {
                 {work.error}
               </div>
             )}
-            <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_380px]">
               <div className="space-y-8">
                 <Section title="处理经过">
                   <Panel>
                     <Timeline download={download} analysis={analysis} stages={stages} />
                   </Panel>
+                </Section>
+                <Section title="执行尝试">
+                  <AttemptHistory
+                    title="下载认领"
+                    attempts={download_attempts}
+                    defaultStage="下载视频"
+                  />
+                  <AttemptHistory
+                    title="分析尝试"
+                    attempts={analysis_attempts}
+                    defaultStage="视频分析"
+                  />
                 </Section>
                 {result?.recognition && <RecognitionResult recognition={result.recognition} />}
                 <Section title="讲话文本">
@@ -266,6 +288,7 @@ function Timeline({
           <TableHead className="w-28">状态</TableHead>
           <TableHead className="w-24">耗时</TableHead>
           <TableHead>模型</TableHead>
+          <TableHead>执行器</TableHead>
           <TableHead>说明</TableHead>
         </TableRow>
       </TableHeader>
@@ -283,6 +306,12 @@ function Timeline({
               {duration(download.published_at, download.finished_at)}
             </TableCell>
             <TableCell />
+            <TableCell className="min-w-36 text-xs">
+              <ExecutorAttribution
+                last={download.last_started_executor_id}
+                result={download.result_executor_id}
+              />
+            </TableCell>
             <TableCell className="text-status-failed text-xs">{download.error}</TableCell>
           </TableRow>
         )}
@@ -299,6 +328,12 @@ function Timeline({
               {duration(analysis.submitted_at, analysis.finished_at)}
             </TableCell>
             <TableCell />
+            <TableCell className="min-w-36 text-xs">
+              <ExecutorAttribution
+                last={analysis.last_executor_id}
+                result={analysis.result_executor_id}
+              />
+            </TableCell>
             <TableCell className="text-xs">
               {analysis.reused_from ? (
                 `采用了任务 ${analysis.reused_from} 的结果`
@@ -343,6 +378,12 @@ function Timeline({
                   · {stage.prompt_version ? `v${stage.prompt_version}` : "内置提示词"}
                 </span>
               )}
+            </TableCell>
+            <TableCell className="min-w-36 text-xs">
+              <ExecutorAttribution
+                last={stage.last_executor_id}
+                result={stage.result_executor_id}
+              />
             </TableCell>
             <TableCell className="text-xs">
               {stage.error && <span className="text-status-failed">{stage.error}</span>}

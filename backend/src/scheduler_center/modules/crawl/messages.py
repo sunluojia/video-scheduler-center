@@ -67,6 +67,9 @@ class EventBase(BaseModel):
     task_id: UUID
     run: int = Field(ge=1)
     occurred_at: datetime
+    executor_id: str | None = Field(default=None, max_length=128)
+    executor_session_id: UUID | None = None
+    attempt_id: UUID | None = None
 
 
 class Accepted(EventBase):

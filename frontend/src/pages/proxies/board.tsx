@@ -311,7 +311,7 @@ function ClusterForm({ use }: { use: UseCard }) {
         <Input
           type="number"
           min={1}
-          max={20}
+          max={40}
           required
           className="w-28 font-mono"
           value={limit}

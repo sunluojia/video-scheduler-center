@@ -11,6 +11,7 @@ from scheduler_center.core.database.mapping import (
 from scheduler_center.modules.analysis.models import (
     AnalysisJob,
     AnalysisStage,
+    AnalysisStageAttempt,
     JobKind,
     JobStatus,
     StageStatus,
@@ -36,6 +37,10 @@ analysis_jobs = Table(
     Column("accepted_at", timestamp()),
     Column("finished_at", timestamp()),
     Column("event_at", timestamp()),
+    Column("last_executor_id", String(128)),
+    Column("result_executor_id", String(128)),
+    Column("retry_generation", Integer),
+    Column("last_executor_at", timestamp()),
     Index(
         "ix_analysis_jobs_unaccepted",
         "submitted_at",
@@ -49,7 +54,7 @@ analysis_stages = Table(
     Column("id", Uuid, primary_key=True),
     Column("job_id", reference("analysis_jobs.id"), nullable=False),
     Column("run", Integer, nullable=False),
-    Column("stage", String(32), nullable=False),
+    Column("stage", String(64), nullable=False),
     Column("segment", Integer),
     Column("status", enum_column(StageStatus), nullable=False),
     Column("attempt", Integer, nullable=False),
@@ -60,8 +65,37 @@ analysis_stages = Table(
     Column("retry_at", timestamp()),
     Column("started_at", timestamp()),
     Column("occurred_at", timestamp(), nullable=False, index=True),  # 数据看板按时间统计用时
+    Column("last_executor_id", String(128)),
+    Column("result_executor_id", String(128)),
+    Column("retry_generation", Integer),
     UniqueConstraint("job_id", "run", "stage", "segment", postgresql_nulls_not_distinct=True),
+)
+
+analysis_stage_attempts = Table(
+    "analysis_stage_attempts",
+    metadata,
+    Column("attempt_id", Uuid, primary_key=True),
+    Column("job_id", Uuid, nullable=False),
+    Column("run", Integer, nullable=False),
+    Column("retry_generation", Integer, nullable=False, server_default="0"),
+    Column("stage", String(64), nullable=False),
+    Column("segment", Integer),
+    Column("attempt_no", Integer, nullable=False),
+    Column("executor_id", String(128)),
+    Column("executor_session_id", Uuid),
+    Column("status", String(32), nullable=False),
+    Column("started_at", timestamp()),
+    Column("ended_at", timestamp()),
+    Column("error", Text),
+    Column("model", String(128)),
+    # 重爬会删除旧作品和分析任务。排障明细仍保留这些记录直到删除批次。
+    Column("batch_id", reference("batches.id"), index=True),
+    Column("creator_id", Uuid),
+    Column("work_id", String(64)),
+    Index("ix_analysis_stage_attempts_job_run", "job_id", "run"),
+    Index("ix_analysis_stage_attempts_executor_ended", "executor_id", "ended_at"),
 )
 
 mapper_registry.map_imperatively(AnalysisJob, analysis_jobs)
 mapper_registry.map_imperatively(AnalysisStage, analysis_stages)
+mapper_registry.map_imperatively(AnalysisStageAttempt, analysis_stage_attempts)

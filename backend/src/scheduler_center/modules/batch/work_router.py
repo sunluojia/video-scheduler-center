@@ -4,13 +4,15 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Response
 
 from scheduler_center.core.common.errors import NotFound
-from scheduler_center.core.web.dependencies import DatabaseDep, PagingDep
+from scheduler_center.core.web.dependencies import DatabaseDep, LegacyCrawlerDispatchDep, PagingDep
 from scheduler_center.core.web.schemas import Page
+from scheduler_center.modules.analysis.attempts import AnalysisAttempts
 from scheduler_center.modules.analysis.messages import JobState
 from scheduler_center.modules.analysis.repository import AnalysisJobRepository
 from scheduler_center.modules.batch.models import Creator, Work, WorkStatus
 from scheduler_center.modules.batch.repository import CreatorRepository, WorkRepository
 from scheduler_center.modules.batch.schemas import WorkDetail, WorkRow, WorkView
+from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.crawl.repository import CrawlerTaskRepository
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.models import ExecutorKind
@@ -50,22 +52,32 @@ async def get_work(work_id: UUID, database: DatabaseDep) -> WorkDetail:
             creator=await CreatorRepository(session).require(Creator, work.creator_id),
             download=download,
             analysis=job,
+            download_attempts=await CrawlerAttempts(session).of_tasks([download.id])
+            if download
+            else [],
+            analysis_attempts=await AnalysisAttempts(session).of_jobs([job.id]) if job else [],
             stages=await jobs.stages(job.id, job.run) if job else [],
             history=await EventLog(session).of_tasks(task_ids),
         )
 
 
 @router.post("/{work_id}/redownload")
-async def redownload(work_id: UUID, database: DatabaseDep) -> WorkView:
+async def redownload(
+    work_id: UUID, database: DatabaseDep, legacy_crawler_dispatch: LegacyCrawlerDispatchDep
+) -> WorkView:
     async with database.transaction() as session:
-        return WorkView.model_validate(await Flow(session).redownload(work_id))
+        flow = Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch)
+        return WorkView.model_validate(await flow.redownload(work_id))
 
 
 @router.post("/{work_id}/reanalyze")
-async def reanalyze(work_id: UUID, database: DatabaseDep) -> WorkView:
+async def reanalyze(
+    work_id: UUID, database: DatabaseDep, legacy_crawler_dispatch: LegacyCrawlerDispatchDep
+) -> WorkView:
     """新一轮分析，不复用已有结果；原视频已清理时先重新下载。"""
     async with database.transaction() as session:
-        return WorkView.model_validate(await Flow(session).reanalyze(work_id))
+        flow = Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch)
+        return WorkView.model_validate(await flow.reanalyze(work_id))
 
 
 @router.post("/{work_id}/abandon")

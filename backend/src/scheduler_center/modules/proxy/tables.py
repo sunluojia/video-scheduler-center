@@ -127,6 +127,7 @@ proxy_leases = Table(
     Column("line", String(160), nullable=False),
     Column("proxy_id", Uuid),
     Column("task_id", Uuid),
+    Column("attempt_id", Uuid),
     Column("probe", Boolean, nullable=False),
     Column("acquired_at", timestamp(), nullable=False, index=True),
     Column("expires_at", timestamp(), nullable=False),

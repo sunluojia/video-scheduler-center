@@ -9,7 +9,7 @@ from fastapi import APIRouter, Form, Response, UploadFile
 from pydantic import TypeAdapter
 
 from scheduler_center.core.database.engine import Database
-from scheduler_center.core.web.dependencies import DatabaseDep, PagingDep
+from scheduler_center.core.web.dependencies import DatabaseDep, LegacyCrawlerDispatchDep, PagingDep
 from scheduler_center.core.web.schemas import Page
 from scheduler_center.modules.analysis.messages import JobState
 from scheduler_center.modules.batch.models import Batch, BatchStatus, CreatorProgress, CreatorStatus
@@ -31,6 +31,7 @@ from scheduler_center.modules.batch.service import create_batch
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.gateway import Gateway
 from scheduler_center.modules.executor.models import ExecutorKind
+from scheduler_center.modules.flow.diagnostics import batch_attempts, build_attempt_csv
 from scheduler_center.modules.flow.service import Flow
 from scheduler_center.modules.report.exporter import CreatorResult, build_workbook
 from scheduler_center.modules.report.importer import read_roster
@@ -54,6 +55,7 @@ async def list_batches(
 @router.post("", status_code=201)
 async def create(
     database: DatabaseDep,
+    legacy_crawler_dispatch: LegacyCrawlerDispatchDep,
     name: Annotated[str, Form(min_length=1, max_length=128)],
     file: UploadFile | None = None,
     links: Annotated[str | None, Form()] = None,
@@ -67,7 +69,7 @@ async def create(
     async with database.transaction() as session:
         batch = await create_batch(session, name.strip(), source, rows)
         if start:
-            await Flow(session).start(batch.id)
+            await Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch).start(batch.id)
     return BatchView.model_validate(batch)
 
 
@@ -80,9 +82,11 @@ async def get_batch(batch_id: UUID, database: DatabaseDep) -> BatchRow:
 
 
 @router.post("/{batch_id}/start")
-async def start(batch_id: UUID, database: DatabaseDep) -> BatchView:
+async def start(
+    batch_id: UUID, database: DatabaseDep, legacy_crawler_dispatch: LegacyCrawlerDispatchDep
+) -> BatchView:
     async with database.transaction() as session:
-        batch = await Flow(session).start(batch_id)
+        batch = await Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch).start(batch_id)
     return BatchView.model_validate(batch)
 
 
@@ -118,10 +122,13 @@ async def retry(batch_id: UUID, database: DatabaseDep, gateway: GatewayDep) -> A
 
 
 @router.post("/{batch_id}/recrawl")
-async def recrawl(batch_id: UUID, database: DatabaseDep) -> Affected:
+async def recrawl(
+    batch_id: UUID, database: DatabaseDep, legacy_crawler_dispatch: LegacyCrawlerDispatchDep
+) -> Affected:
     """重新爬取批次中需要重新抓取的达人。"""
     async with database.transaction() as session:
-        return Affected(count=await Flow(session).recrawl_batch(batch_id))
+        flow = Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch)
+        return Affected(count=await flow.recrawl_batch(batch_id))
 
 
 @router.delete("/{batch_id}", status_code=204)
@@ -158,7 +165,11 @@ async def list_creators(
     return Page(items=rows, total=total)
 
 
-@router.get("/{batch_id}/export")
+@router.get(
+    "/{batch_id}/export",
+    response_class=Response,
+    responses={200: {"content": {XLSX: {"schema": {"type": "string", "format": "binary"}}}}},
+)
 async def export(batch_id: UUID, database: DatabaseDep) -> Response:
     """导出交付表；批次进行中也可以导出当前结果。"""
     async with database.transaction() as session:
@@ -179,6 +190,25 @@ async def export(batch_id: UUID, database: DatabaseDep) -> Response:
     return Response(
         content,
         media_type=XLSX,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
+@router.get(
+    "/{batch_id}/execution-attempts",
+    response_class=Response,
+    responses={200: {"content": {"text/csv": {"schema": {"type": "string", "format": "binary"}}}}},
+)
+async def export_execution_attempts(batch_id: UUID, database: DatabaseDep) -> Response:
+    """导出本批次爬取、下载和分析的执行排障明细。"""
+    async with database.transaction() as session:
+        batch = await BatchRepository(session).require(Batch, batch_id)
+        rows = await batch_attempts(session, batch_id)
+    content = await anyio.to_thread.run_sync(build_attempt_csv, batch, rows)
+    filename = quote(f"{batch.name}-执行排障明细.csv")
+    return Response(
+        content,
+        media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.drawing.image import Image as SheetImage
 from PIL import Image
 
@@ -197,6 +198,35 @@ def test_export_puts_each_creator_in_one_sheet_in_roster_order():
     assert retry["D2"].value == "爬取失败：作品列表等待响应超时"
     assert (len(success._images), len(retry._images)) == (1, 1)
     assert success["A3"].number_format == "@"
+
+
+def test_export_sorts_topics_and_colors_only_tags_missing_from_type_summary():
+    owner = creator(
+        1,
+        "done",
+        CreatorStatus.COMPLETED,
+        labels=["图文作者", " 视频时长1分钟"],
+        tags=["＃测评", "健身", "视频时长15秒", "  视频时长15–59秒"],
+    )
+    entry = work(
+        owner,
+        1,
+        WorkStatus.COMPLETED,
+        tags=["#健身", "瑜伽", "健身", "＃测评", "视频时长15秒", "\t视频时长30秒", "口播"],
+    )
+    data = build_workbook([CreatorResult(owner, [entry], None)])
+    sheet = load_workbook(io.BytesIO(data), rich_text=True)["成功达人"]
+
+    assert sheet["O3"].value == "图文作者、健身、＃测评"
+    assert sheet["E3"].value == "#健身、瑜伽、健身、＃测评、口播"
+    text = sheet["N3"].value
+    assert isinstance(text, CellRichText)
+    assert str(text) == "图文作者、瑜伽、健身、口播、#健身、＃测评"
+    assert [(run.text, run.font.color.rgb) for run in text if isinstance(run, TextBlock)] == [
+        ("瑜伽", "FFFF0000"),
+        ("口播", "FFFF0000"),
+        ("#健身", "FFFF0000"),
+    ]
 
 
 def creator(position: int, name: str, status: CreatorStatus, **fields) -> Creator:

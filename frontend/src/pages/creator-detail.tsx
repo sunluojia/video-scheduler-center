@@ -2,6 +2,7 @@ import { ExternalLink, Image as ImageIcon, RefreshCw, Sigma } from "lucide-react
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { $api, type Schemas } from "@/api/client";
+import { AttemptHistory, ExecutorName } from "@/components/attempt-history";
 import { Facts, Notice, PageHeader, Panel, QueryState, Section, Tags } from "@/components/page";
 import { Status, StatusOf } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,7 @@ export function CreatorDetailPage() {
 
   return (
     <QueryState query={detail} rows={6}>
-      {({ creator, batch, crawl, works, summary, history }) => (
+      {({ creator, batch, crawl, works, summary, crawl_attempts, summary_attempts, history }) => (
         <>
           <PageHeader
             eyebrow={
@@ -87,7 +88,7 @@ export function CreatorDetailPage() {
               {creator.note}
             </div>
           )}
-          <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="space-y-8">
               <Section title="锁定的作品">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -117,6 +118,12 @@ export function CreatorDetailPage() {
                       {summary.error && (
                         <p className="text-status-failed text-sm">{summary.error}</p>
                       )}
+                      <Facts
+                        items={[
+                          ["最近执行器", <ExecutorName id={summary.last_executor_id} />],
+                          ["结果执行器", <ExecutorName id={summary.result_executor_id} />],
+                        ]}
+                      />
                     </>
                   ) : (
                     <p className="text-muted-foreground text-sm">
@@ -128,6 +135,18 @@ export function CreatorDetailPage() {
                     </p>
                   )}
                 </Panel>
+              </Section>
+              <Section title="执行尝试">
+                <AttemptHistory
+                  title="爬取认领"
+                  attempts={crawl_attempts}
+                  defaultStage="爬取达人"
+                />
+                <AttemptHistory
+                  title="汇总尝试"
+                  attempts={summary_attempts}
+                  defaultStage="汇总任务"
+                />
               </Section>
               <Section title="爬取记录">
                 <Panel>
@@ -191,6 +210,8 @@ export function CreatorDetailPage() {
                         ["发布", dateTime(crawl.published_at)],
                         ["受理", dateTime(crawl.accepted_at)],
                         ["结束", dateTime(crawl.finished_at)],
+                        ["最近执行器", <ExecutorName id={crawl.last_started_executor_id} />],
+                        ["结果执行器", <ExecutorName id={crawl.result_executor_id} />],
                       ]}
                     />
                   </Panel>
@@ -295,6 +316,7 @@ export function History({ events }: { events: Schemas["EventView"][] }) {
               <span className="text-muted-foreground font-mono text-xs">
                 第 {String(payload.run)} 轮
               </span>
+              {event.executor_id && <ExecutorName id={event.executor_id} />}
               {typeof payload.reason === "string" && (
                 <span className="text-xs">{payload.reason}</span>
               )}

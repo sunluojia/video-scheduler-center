@@ -43,6 +43,9 @@ events = Table(
     Column("payload", JSONB, nullable=False),
     Column("occurred_at", timestamp(), nullable=False, index=True),  # 数据看板按时间统计
     Column("received_at", timestamp(), nullable=False),
+    Column("executor_id", String(128)),
+    Column("executor_session_id", Uuid),
+    Column("attempt_id", Uuid),
     UniqueConstraint("source", "event_id"),
 )
 
@@ -68,6 +71,9 @@ class EventLog(Repository):
                 payload=event.model_dump(mode="json"),
                 occurred_at=event.occurred_at,
                 received_at=utcnow(),
+                executor_id=event.executor_id,
+                executor_session_id=event.executor_session_id,
+                attempt_id=event.attempt_id,
             )
             .on_conflict_do_nothing(index_elements=["source", "event_id"])
             .returning(events.c.seq)
@@ -76,7 +82,15 @@ class EventLog(Repository):
 
     async def of_tasks(self, task_ids: Sequence[UUID]) -> list[Row]:
         stmt = (
-            select(events.c.source, events.c.task_id, events.c.payload, events.c.received_at)
+            select(
+                events.c.source,
+                events.c.task_id,
+                events.c.payload,
+                events.c.received_at,
+                events.c.executor_id,
+                events.c.executor_session_id,
+                events.c.attempt_id,
+            )
             .where(events.c.task_id.in_(task_ids))
             .order_by(events.c.occurred_at, events.c.seq)
         )

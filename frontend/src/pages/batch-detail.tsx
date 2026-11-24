@@ -7,6 +7,7 @@ import {
   ExternalLink,
   ListCollapse,
   ListTree,
+  LoaderCircle,
   Pause,
   Play,
   RefreshCw,
@@ -16,9 +17,10 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { Fragment, type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
-import { $api, fetchClient, type Schemas } from "@/api/client";
+import { toast } from "sonner";
+import { $api, errorText, fetchClient, type Schemas } from "@/api/client";
 import { Confirm } from "@/components/confirm";
 import { DataTable, Pager } from "@/components/data-table";
 import { Elapsed, Panel, QueryState, Tags } from "@/components/page";
@@ -224,11 +226,10 @@ function Header({ batch }: { batch: BatchRow }) {
             </Button>
           </>
         )}
-        <Button size="sm" variant="outline" asChild>
-          <a href={`/api/batches/${batch.id}/export`}>
-            <Download /> 导出 Excel
-          </a>
-        </Button>
+        <BatchExportButton key={`${batch.id}-workbook`} batch={batch} report="workbook" />
+        {batch.started_at && (
+          <BatchExportButton key={`${batch.id}-attempts`} batch={batch} report="attempts" />
+        )}
         {started && (
           <Button size="sm" variant="outline" asChild>
             <Link to={`/stats?batch=${batch.id}`}>
@@ -261,6 +262,106 @@ function Header({ batch }: { batch: BatchRow }) {
         )}
       </div>
     </header>
+  );
+}
+
+const EXPORT_TIMEOUT_MS = 180_000;
+const BATCH_REPORTS = {
+  workbook: {
+    path: "/api/batches/{batch_id}/export",
+    mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    filename: "达人标签结果.xlsx",
+    name: "Excel",
+    label: "导出 Excel",
+  },
+  attempts: {
+    path: "/api/batches/{batch_id}/execution-attempts",
+    mediaType: "text/csv",
+    filename: "执行排障明细.csv",
+    name: "执行排障明细",
+    label: "执行排障明细",
+  },
+} as const;
+
+function BatchExportButton({
+  batch,
+  report,
+}: {
+  batch: Pick<BatchRow, "id" | "name">;
+  report: keyof typeof BATCH_REPORTS;
+}) {
+  const file = BATCH_REPORTS[report];
+  const [exporting, setExporting] = useState(false);
+  const activeRequest = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      activeRequest.current?.abort();
+      activeRequest.current = null;
+    },
+    [],
+  );
+
+  async function downloadReport() {
+    if (activeRequest.current) return;
+    const request = new AbortController();
+    activeRequest.current = request;
+    const timeout = window.setTimeout(() => {
+      request.abort(new DOMException(`生成 ${file.name} 超时，请重试`, "TimeoutError"));
+    }, EXPORT_TIMEOUT_MS);
+    setExporting(true);
+
+    try {
+      const { data, error, response } = await fetchClient.GET(file.path, {
+        params: { path: { batch_id: batch.id } },
+        parseAs: "blob",
+        signal: request.signal,
+      });
+      if (!response.ok) {
+        if (error && typeof error === "object") throw error;
+        throw new Error(`${file.name} 导出失败（HTTP ${response.status}）`);
+      }
+      if (!data?.size || data.type.split(";", 1)[0] !== file.mediaType) {
+        throw new Error(`未收到有效的 ${file.name} 文件，请重试`);
+      }
+      request.signal.throwIfAborted();
+      const url = URL.createObjectURL(data);
+      const download = document.createElement("a");
+      download.href = url;
+      download.download = `${batch.name}-${file.filename}`;
+      document.body.append(download);
+      download.click();
+      download.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast.success(`${file.name} 已生成，已发起下载`);
+    } catch (error) {
+      if (activeRequest.current === request) {
+        toast.error(errorText(request.signal.aborted ? request.signal.reason : error));
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      if (activeRequest.current === request) {
+        activeRequest.current = null;
+        setExporting(false);
+      }
+    }
+  }
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={exporting}
+        onClick={() => void downloadReport()}
+      >
+        {exporting ? <LoaderCircle className="motion-safe:animate-spin" /> : <Download />}
+        {exporting ? `正在生成 ${file.name}…` : file.label}
+      </Button>
+      <span role="status" aria-label={`${file.name} 导出进度`} className="sr-only">
+        {exporting ? `正在生成 ${file.name}，大批次可能需要等待一段时间。` : ""}
+      </span>
+    </>
   );
 }
 

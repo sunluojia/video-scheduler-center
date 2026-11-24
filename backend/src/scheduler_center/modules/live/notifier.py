@@ -20,5 +20,8 @@ class Live(Repository):
         """代理或线路的状态变了：页面同样整体刷新。"""
         await self._notify({"batch_id": "proxies"})
 
+    async def attempts_changed(self) -> None:
+        await self._notify({"batch_id": "*"})
+
     async def _notify(self, payload: dict) -> None:
         await self._session.execute(select(func.pg_notify(CHANNEL, json.dumps(payload))))

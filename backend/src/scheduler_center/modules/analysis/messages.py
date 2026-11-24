@@ -45,30 +45,33 @@ class SummarizeCreator(JobMessage):
     videos: list[SourceVideo]
 
 
-class JobEvent(BaseModel):
-    type: Literal["job"]
+class AnalysisEventBase(BaseModel):
     event_id: UUID
     job_id: UUID
     run: int
+    occurred_at: datetime
+    executor_id: str | None = Field(default=None, max_length=128)
+    executor_session_id: UUID | None = None
+    attempt_id: UUID | None = None
+    retry_generation: int | None = Field(default=None, ge=0)
+
+
+class JobEvent(AnalysisEventBase):
+    type: Literal["job"]
     kind: JobKind
     status: JobStatus
-    occurred_at: datetime
     result: dict | None = None
     error: str | None = None
     reused_from: str | None = None
     artifacts_until: datetime | None = None
 
 
-class StageEvent(BaseModel):
+class StageEvent(AnalysisEventBase):
     type: Literal["stage"]
-    event_id: UUID
-    job_id: UUID
-    run: int
-    stage: str
+    stage: str = Field(max_length=64)
     segment: int | None = None
     attempt: int = 0
     status: StageStatus
-    occurred_at: datetime
     model: str | None = None
     prompt_version: int | None = None
     result: dict | None = None

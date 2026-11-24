@@ -12,6 +12,8 @@
 
 API 和 Worker 需要共享原视频目录（`SC_MATERIAL_ROOT`）。
 
+爬取和下载默认由爬虫经 HTTP 从 PostgreSQL 认领。切换旧环境时，先停止旧版 Redis 爬虫和调度中心的三个进程，再迁移到 `0016`，随后启动新版调度中心和爬虫。迁移会把未结束的爬取、下载轮次放回待领队列。只与旧版 Redis 爬虫联调时，将 API、Worker、事件接收进程的 `SC_LEGACY_CRAWLER_DISPATCH` 统一设为 `true`，该模式使用 Redis 派单并关闭 HTTP 认领。分析任务和执行结果事件继续走 Redis。
+
 ## 本地开发
 
 需要 [uv](https://docs.astral.sh/uv/)、Node.js 24、pnpm、PostgreSQL 和 Redis。
@@ -65,6 +67,8 @@ pnpm api
 ```
 
 ### 模拟爬取程序
+
+模拟爬虫使用旧版 Redis 派单，运行前请统一开启 `SC_LEGACY_CRAWLER_DISPATCH`。
 
 `tools/fake_crawler` 按 [第 4 节的约定](docs/design.md#4-与爬取程序的约定)模拟爬取程序，只用于开发和联调。样例目录中每位达人一个子目录（目录名是账号）：`.mp4`、`.mov` 是视频，`.jpg`、`.png` 是图文，按文件名排序；子目录中放 `PRIVATE` 文件表示私密账号，放 `LOGIN` 文件表示需要登录，放 `FAIL` 文件表示爬取失败（读到了主页，作品列表没读成），没有子目录表示找不到此达人。暂停采集时只停新的达人采集，下载照常。在项目根目录执行（需要设置 `SC_SERVICE_TOKEN` 环境变量）：
 

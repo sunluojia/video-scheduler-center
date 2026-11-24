@@ -52,6 +52,10 @@ class AnalysisJob:
     finished_at: datetime | None = None
     event_at: datetime | None = None
     """最近一次采纳的任务事件发生的时间（分析服务的时钟）；更早发生的是乱序到达的，不再采纳。"""
+    last_executor_id: str | None = None
+    result_executor_id: str | None = None
+    retry_generation: int | None = None
+    last_executor_at: datetime | None = None
 
     def resubmit(self, now: datetime, sources: list[dict] | None = None) -> None:
         """新一轮：消息由调用方按新轮次生成。"""
@@ -60,6 +64,12 @@ class AnalysisJob:
         self.status, self.submitted_at = JobStatus.SUBMITTED, now
         self.result = self.error = self.reused_from = self.artifacts_until = None
         self.accepted_at = self.finished_at = self.event_at = None
+        self.last_executor_id = self.result_executor_id = self.retry_generation = None
+        self.last_executor_at = None
+
+    def observe_executor(self, executor_id: str | None, occurred_at: datetime) -> None:
+        if executor_id and (not self.last_executor_at or occurred_at >= self.last_executor_at):
+            self.last_executor_id, self.last_executor_at = executor_id, occurred_at
 
     def follow(
         self,
@@ -96,6 +106,7 @@ class AnalysisJob:
     def end(self, status: JobStatus, now: datetime) -> None:
         """放弃或取消。"""
         self.status, self.finished_at = status, now
+        self.result_executor_id = None
 
 
 class StageStatus(StrEnum):
@@ -125,3 +136,27 @@ class AnalysisStage:
     error: str | None = None
     retry_at: datetime | None = None
     started_at: datetime | None = None
+    last_executor_id: str | None = None
+    result_executor_id: str | None = None
+    retry_generation: int | None = None
+
+
+@dataclass
+class AnalysisStageAttempt:
+    attempt_id: UUID
+    job_id: UUID
+    run: int
+    retry_generation: int
+    stage: str
+    segment: int | None
+    attempt_no: int
+    executor_id: str | None
+    executor_session_id: UUID | None
+    status: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    error: str | None = None
+    model: str | None = None
+    batch_id: UUID | None = None
+    creator_id: UUID | None = None
+    work_id: str | None = None

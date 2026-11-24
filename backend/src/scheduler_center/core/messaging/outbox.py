@@ -54,7 +54,7 @@ class Outbox(Repository):
             )
         )
 
-    async def pending(self, limit: int) -> list[Row]:
+    async def pending(self, limit: int, *, exclude_queue: str | None = None) -> list[Row]:
         """按写入顺序取出待投递的消息；其他 Worker 正在投递的行会被跳过。"""
         stmt = (
             select(outbox.c.id, outbox.c.queue, outbox.c.actor, outbox.c.payload)
@@ -63,6 +63,8 @@ class Outbox(Repository):
             .limit(limit)
             .with_for_update(skip_locked=True, key_share=True)
         )
+        if exclude_queue is not None:
+            stmt = stmt.where(outbox.c.queue != exclude_queue)
         return list((await self._session.execute(stmt)).all())
 
     async def withdraw(self, batch_id: UUID) -> None:

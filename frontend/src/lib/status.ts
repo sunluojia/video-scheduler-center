@@ -95,6 +95,16 @@ export const taskStatus: Labels<Schemas["CrawlerTaskStatus"]> = {
   cancelled: ["已取消", "muted"],
 };
 
+export const crawlerAttemptStatus: Labels<Schemas["CrawlerAttemptStatus"]> = {
+  leased: ["已认领", "active"],
+  running: ["进行中", "active"],
+  deferred: ["已延期", "attention"],
+  succeeded: ["已完成", "done"],
+  failed: ["失败", "failed"],
+  cancelled: ["已取消", "muted"],
+  expired: ["租约过期", "attention"],
+};
+
 export const conclusions: Record<Schemas["CrawlConclusion"], string> = {
   ok: "锁定作品",
   private: "私密账号",

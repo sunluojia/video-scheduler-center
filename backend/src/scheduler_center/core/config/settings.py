@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     queue_namespace: str = "dramatiq"
     """与爬取程序、分析服务使用同一个 Redis 和命名空间。"""
+    legacy_crawler_dispatch: bool = False
+    """使用旧版 Redis 爬虫派单；切换时 API、Worker、事件接收进程应使用相同配置。"""
     material_root: Path = Path("data/materials")
     """爬取程序上传的原视频，API 与 Worker 共享。"""
     heartbeat_timeout_seconds: float = 60
@@ -32,6 +34,7 @@ class WorkerSettings(Settings):
     poll_interval_seconds: float = 1
     reconcile_after_minutes: float = 30
     """已发布的任务超过这个时长仍未受理，重新投递。"""
+    cleanup_enabled: bool = True
     cleanup_interval_minutes: float = 10
 
 

@@ -5,6 +5,7 @@ import time
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import update
 
 from scheduler_center.core.common.clock import utcnow
@@ -65,7 +66,11 @@ async def test_unaccepted_tasks_are_republished_only_while_the_executor_is_onlin
     assert len(await messages(database, "crawl_creator")) == 2
 
 
-async def test_clean_up_removes_files_that_are_no_longer_needed(database, database_url, tmp_path):
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_clean_up_respects_the_worker_setting(
+    database, database_url, tmp_path, monkeypatch, enabled
+):
+    monkeypatch.setenv("SC_CLEANUP_ENABLED", str(enabled))
     root = tmp_path / "materials"
     (root / "incoming").mkdir(parents=True)
     old = time.time() - 3600
@@ -77,5 +82,5 @@ async def test_clean_up_removes_files_that_are_no_longer_needed(database, databa
 
     await worker(database, database_url, tmp_path).clean_up()
 
-    assert [path.exists() for path in (stale, fresh, partial)] == [False, True, False]
+    assert [path.exists() for path in (stale, fresh, partial)] == [not enabled, True, not enabled]
     assert UUID(fresh.name)  # 刚写入、可能还没登记的文件保留

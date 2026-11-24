@@ -18,6 +18,8 @@ from pydantic import (
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.core.common.errors import Conflict, Unavailable
 from scheduler_center.core.web.dependencies import DatabaseDep
+from scheduler_center.modules.crawl.attempts import CrawlerAttempts
+from scheduler_center.modules.executor.activity import ExecutorActivity, executor_activity
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.gateway import Gateway
 from scheduler_center.modules.executor.models import Executor, ExecutorKind
@@ -38,6 +40,12 @@ class Registration(BaseModel):
     version: str = Field(max_length=64)
     leases: list[UUID] = Field(default_factory=list, max_length=500)
     """爬取程序正在用的下载线路（租约），随心跳续期；60 秒没有续期即收回。"""
+    executor_session_id: UUID | None = None
+    task_attempts: list[UUID] = Field(
+        default_factory=list,
+        max_length=500,
+        description="只续租本次上报且仍有效的任务认领 ID。",
+    )
     identities: IdentitySnapshot | None = None
     """爬取程序的身份池快照，账号池页面显示。"""
 
@@ -81,9 +89,16 @@ class ExecutorView(BaseModel):
     crawl_slots: int
     download_slots: int
     warm_slots: int
+    activity: ExecutorActivity = Field(default_factory=ExecutorActivity)
 
     @classmethod
-    def of(cls, item: Executor, now: datetime, timeout: timedelta) -> Self:
+    def of(
+        cls,
+        item: Executor,
+        now: datetime,
+        timeout: timedelta,
+        activity: ExecutorActivity | None = None,
+    ) -> Self:
         return cls(
             kind=item.kind,
             instance_id=item.instance_id,
@@ -96,13 +111,14 @@ class ExecutorView(BaseModel):
             crawl_slots=item.crawl_slots,
             download_slots=item.download_slots,
             warm_slots=item.warm_slots,
+            activity=activity or ExecutorActivity(),
         )
 
 
 class Slots(BaseModel):
     crawl_slots: int = Field(ge=1, le=16)
     """同时获取几个达人，每个开一个 Chrome 窗口（约 400 MB）。"""
-    download_slots: int = Field(ge=1, le=32)
+    download_slots: int = Field(ge=1, le=80)
     """同时下载几条视频。"""
     warm_slots: int | None = Field(default=None, ge=1, le=16)
     """同时预热几个身份。省略时保留当前设置。"""
@@ -116,6 +132,9 @@ class RegistrationReply(BaseModel):
     download_slots: int | None = None
     warm_slots: int | None = None
     """爬取程序的并发，执行程序页设置；分析服务没有。"""
+    revoked_attempts: list[UUID] = Field(
+        default_factory=list, description="本次上报但已失效的任务认领 ID。"
+    )
 
 
 class CrawlProgress(BaseModel):
@@ -167,9 +186,12 @@ async def register(
         executors = ExecutorRepository(session)
         snapshot = body.identities and body.identities.model_dump(mode="json")
         await executors.heartbeat(kind, instance_id, body.url, body.version, now, snapshot)
-        await LeaseRepository(session).renew(instance_id, body.leases, now)
         if kind != ExecutorKind.CRAWLER:
             return RegistrationReply()
+        revoked = await CrawlerAttempts(session).renew(
+            instance_id, body.executor_session_id, body.task_attempts
+        )
+        await LeaseRepository(session).renew(instance_id, body.leases, now)
         item = await executors.require(Executor, (kind, instance_id))
         pool = IdentityPoolRepository(session)
         return RegistrationReply(
@@ -179,6 +201,7 @@ async def register(
             crawl_slots=item.crawl_slots,
             download_slots=item.download_slots,
             warm_slots=item.warm_slots,
+            revoked_attempts=revoked,
         )
 
 
@@ -194,7 +217,11 @@ async def list_executors(request: Request, database: DatabaseDep) -> list[Execut
     now = utcnow()
     async with database.transaction() as session:
         executors = await ExecutorRepository(session).all()
-    return [ExecutorView.of(item, now, timeout) for item in executors]
+        activity = await executor_activity(session, executors, now)
+    return [
+        ExecutorView.of(item, now, timeout, activity.get((item.kind, item.instance_id)))
+        for item in executors
+    ]
 
 
 @router.post("/executors", status_code=201)

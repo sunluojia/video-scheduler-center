@@ -16,6 +16,7 @@ from scheduler_center.modules.batch.models import (
 from scheduler_center.modules.crawl.messages import CrawledProfile
 from scheduler_center.modules.crawl.models import (
     CrawlConclusion,
+    CrawlerAttemptStatus,
     CrawlerTaskKind,
     CrawlerTaskStatus,
 )
@@ -107,6 +108,9 @@ class CrawlerTaskView(View):
     published_at: datetime
     accepted_at: datetime | None
     finished_at: datetime | None
+    current_attempt_id: UUID | None
+    last_started_executor_id: str | None
+    result_executor_id: str | None
 
 
 class JobView(View):
@@ -121,6 +125,8 @@ class JobView(View):
     submitted_at: datetime
     accepted_at: datetime | None
     finished_at: datetime | None
+    last_executor_id: str | None
+    result_executor_id: str | None
 
 
 class StageView(View):
@@ -135,6 +141,40 @@ class StageView(View):
     retry_at: datetime | None
     started_at: datetime | None
     occurred_at: datetime
+    last_executor_id: str | None
+    result_executor_id: str | None
+
+
+class CrawlerAttemptView(View):
+    attempt_id: UUID
+    task_id: UUID
+    run: int
+    attempt_no: int
+    executor_id: str
+    executor_session_id: UUID
+    status: CrawlerAttemptStatus
+    claimed_at: datetime
+    lease_expires_at: datetime
+    ended_at: datetime | None
+    error: str | None
+    route_kind: str | None
+
+
+class AnalysisAttemptView(View):
+    attempt_id: UUID
+    job_id: UUID
+    run: int
+    retry_generation: int
+    stage: str
+    segment: int | None
+    attempt_no: int
+    executor_id: str | None
+    executor_session_id: UUID | None
+    status: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    error: str | None
+    model: str | None
 
 
 class EventView(View):
@@ -142,6 +182,9 @@ class EventView(View):
     task_id: UUID
     payload: dict[str, Any]
     received_at: datetime
+    executor_id: str | None
+    executor_session_id: UUID | None
+    attempt_id: UUID | None
 
 
 class CreatorDetail(BaseModel):
@@ -150,6 +193,8 @@ class CreatorDetail(BaseModel):
     crawl: CrawlerTaskView | None
     works: list[WorkView]
     summary: JobView | None
+    crawl_attempts: list[CrawlerAttemptView]
+    summary_attempts: list[AnalysisAttemptView]
     history: list[EventView]
     """爬取任务的事件。"""
 
@@ -159,6 +204,8 @@ class WorkDetail(BaseModel):
     creator: CreatorView
     download: CrawlerTaskView | None
     analysis: JobView | None
+    download_attempts: list[CrawlerAttemptView]
+    analysis_attempts: list[AnalysisAttemptView]
     stages: list[StageView]
     """分析任务当前轮次的各阶段。"""
     history: list[EventView]

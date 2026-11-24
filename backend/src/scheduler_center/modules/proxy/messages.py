@@ -23,6 +23,7 @@ class LeaseRequest(BaseModel):
     """用途：获取信息、下载视频等，线路好坏和并发按用途分开算。"""
     task_id: UUID | None = None
     """为哪个任务申请，只用于记录。"""
+    attempt_id: UUID | None = None
     avoid: list[str] = Field(default_factory=list, max_length=50)
     """这次任务已经失败过的线路；没有别的线路时仍会分到它们。"""
 

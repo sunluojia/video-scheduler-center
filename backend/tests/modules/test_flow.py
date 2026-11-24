@@ -182,7 +182,7 @@ async def test_failed_download_then_recrawl_starts_over(database):
     assert (await load(database, Creator, alice.id)).status == CreatorStatus.RECRAWL
 
     async with database.transaction() as session:
-        await Flow(session).recrawl(alice.id)
+        await Flow(session, legacy_crawler_dispatch=True).recrawl(alice.id)
 
     assert await works(database, alice) == []
     assert (await load(database, Creator, alice.id)).status == CreatorStatus.CRAWLING
@@ -255,7 +255,7 @@ async def test_late_event_does_not_undo_a_failed_redownload(database, service):
     await analysis_says(database, job_event(job_id, "completed", seconds=5, result=recognized("a")))
     job = await load(database, AnalysisJob, UUID(job_id))
     async with database.transaction() as session:
-        await Flow(session).redownload(job.work_id)
+        await Flow(session, legacy_crawler_dispatch=True).redownload(job.work_id)
     download = (await messages(database, "download_video"))[-1]
     await crawler_says(
         database, download["task_id"], "download_failed", run=download["run"], reason="链接失效"
@@ -282,7 +282,7 @@ async def test_reanalysis_runs_again_without_reuse(database, service):
 
     await analysis_says(database, job_event(job_id, "completed", run=2, result=recognized("a")))
     async with database.transaction() as session:
-        await Flow(session).reanalyze(job.work_id)  # 原视频已清理，先重新下载
+        await Flow(session, legacy_crawler_dispatch=True).reanalyze(job.work_id)
 
     download = (await messages(database, "download_video"))[-1]
     assert download["run"] == 2

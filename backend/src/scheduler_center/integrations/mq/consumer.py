@@ -13,11 +13,14 @@ from scheduler_center.modules.crawl.messages import CRAWLER_EVENTS, crawler_even
 from scheduler_center.modules.flow.service import Flow
 
 
-def declare_actors(broker: Broker, database: Database) -> None:
+def declare_actors(
+    broker: Broker, database: Database, *, legacy_crawler_dispatch: bool = False
+) -> None:
     async def on_crawler_event(payload: dict) -> None:
         event = crawler_event.validate_python(payload)
         async with database.transaction() as session:
-            await Flow(session).on_crawler_event(event)
+            flow = Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch)
+            await flow.on_crawler_event(event)
 
     async def on_analysis_event(payload: dict) -> None:
         event = analysis_event.validate_python(payload)

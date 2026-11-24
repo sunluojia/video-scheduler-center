@@ -12,6 +12,8 @@ materials = Table(
     Column("sha256", String(64), nullable=False),
     Column("created_at", timestamp(), nullable=False),
     Column("discarded_at", timestamp()),
+    Column("source_attempt_id", Uuid),
+    Column("source_executor_id", String(128)),
 )
 
 mapper_registry.map_imperatively(Material, materials)

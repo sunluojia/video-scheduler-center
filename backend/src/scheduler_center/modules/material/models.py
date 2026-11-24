@@ -15,6 +15,8 @@ class Material:
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=utcnow)
     discarded_at: datetime | None = None
+    source_attempt_id: UUID | None = None
+    source_executor_id: str | None = None
     """不再需要的时间；文件由 Worker 随后删除。"""
 
     def discard(self, now: datetime) -> None:

@@ -42,7 +42,7 @@ def deliver(broker: StubBroker, queue: str, actor: str, payload: dict) -> None:
 async def test_outbox_is_published_to_the_crawler_queue(database):
     broker = StubBroker()
     await new_batch(database, "alice", "bob")
-    publisher = OutboxPublisher(database, broker)
+    publisher = OutboxPublisher(database, broker, legacy_crawler_dispatch=True)
 
     assert await publisher.publish_pending() == 2
     assert await publisher.publish_pending() == 0

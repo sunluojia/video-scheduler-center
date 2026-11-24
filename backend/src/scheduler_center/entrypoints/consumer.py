@@ -11,4 +11,8 @@ from scheduler_center.modules.tables import metadata  # noqa: F401  加载全部
 
 settings = Settings()
 broker = create_broker(settings)
-declare_actors(broker, Database(settings.database_url))
+declare_actors(
+    broker,
+    Database(settings.database_url),
+    legacy_crawler_dispatch=settings.legacy_crawler_dispatch,
+)

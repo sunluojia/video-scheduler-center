@@ -31,6 +31,36 @@ class CrawlConclusion(StrEnum):
     FAILED = "failed"
 
 
+class CrawlerRunKind(StrEnum):
+    CRAWL = "crawl_creator"
+    DOWNLOAD = "download_video"
+
+
+class CrawlerRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class CrawlerAttemptStatus(StrEnum):
+    LEASED = "leased"
+    RUNNING = "running"
+    DEFERRED = "deferred"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True)
+class AttemptRef:
+    attempt_id: UUID
+    executor_id: str | None
+    executor_session_id: UUID | None
+
+
 @dataclass
 class CrawlerTask:
     """发给爬取程序的任务。重新爬取、重新下载时沿用任务 ID，轮次加一。"""
@@ -49,6 +79,9 @@ class CrawlerTask:
     published_at: datetime = field(default_factory=utcnow)
     accepted_at: datetime | None = None
     finished_at: datetime | None = None
+    current_attempt_id: UUID | None = None
+    last_started_executor_id: str | None = None
+    result_executor_id: str | None = None
 
     @property
     def active(self) -> bool:
@@ -59,10 +92,51 @@ class CrawlerTask:
         self.run += 1
         self.status, self.published_at = CrawlerTaskStatus.PUBLISHED, now
         self.conclusion = self.error = self.accepted_at = self.finished_at = None
+        self.current_attempt_id = self.last_started_executor_id = self.result_executor_id = None
 
     def accept(self, now: datetime) -> None:
         if self.status == CrawlerTaskStatus.PUBLISHED:
-            self.status, self.accepted_at = CrawlerTaskStatus.ACCEPTED, now
+            self.status = CrawlerTaskStatus.ACCEPTED
+        if self.accepted_at is None:
+            self.accepted_at = now
 
     def finish(self, status: CrawlerTaskStatus, now: datetime, error: str | None = None) -> None:
         self.status, self.error, self.finished_at = status, error, now
+
+
+@dataclass
+class CrawlerTaskRun:
+    task_id: UUID
+    run: int
+    batch_id: UUID
+    creator_id: UUID
+    work_id: str | None
+    kind: CrawlerRunKind
+    payload: dict
+    status: CrawlerRunStatus = CrawlerRunStatus.QUEUED
+    attempts: int = 0
+    avoid: list[str] = field(default_factory=list)
+    history: list[str] = field(default_factory=list)
+    next_eligible_at: datetime = field(default_factory=utcnow)
+    current_attempt_id: UUID | None = None
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass
+class CrawlerTaskAttempt:
+    task_id: UUID
+    run: int
+    attempt_no: int
+    executor_id: str
+    executor_session_id: UUID
+    claimed_at: datetime
+    lease_expires_at: datetime
+    attempt_id: UUID = field(default_factory=uuid4)
+    status: CrawlerAttemptStatus = CrawlerAttemptStatus.LEASED
+    ended_at: datetime | None = None
+    error: str | None = None
+    route_kind: str | None = None
+
+    def end(self, status: CrawlerAttemptStatus, now: datetime, error: str | None) -> None:
+        self.status, self.ended_at, self.error = status, now, error

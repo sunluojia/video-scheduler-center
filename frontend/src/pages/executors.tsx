@@ -77,6 +77,31 @@ const columns: ColumnDef<Executor, unknown>[] = [
     ),
   },
   {
+    header: "当前任务",
+    size: 105,
+    cell: ({ row: { original } }) => (
+      <span className="text-xs">
+        {original.activity?.active ?? 0} 个{original.kind === "crawler" ? "认领" : "阶段"}
+      </span>
+    ),
+  },
+  {
+    header: "过去 24 小时",
+    size: 170,
+    cell: ({ row: { original } }) => (
+      <span className="text-xs">
+        完成 {original.activity?.completed_24h ?? 0}
+        {original.kind === "crawler" && (
+          <>
+            {" "}
+            · 过期 {original.activity?.expired_24h ?? 0} · 接手{" "}
+            {original.activity?.takeovers_24h ?? 0}
+          </>
+        )}
+      </span>
+    ),
+  },
+  {
     header: "任务并发",
     size: 215,
     cell: ({ row }) =>
@@ -98,7 +123,7 @@ const columns: ColumnDef<Executor, unknown>[] = [
 ];
 
 export function ExecutorsPage() {
-  const executors = $api.useQuery("get", "/api/executors");
+  const executors = $api.useQuery("get", "/api/executors", {}, { refetchInterval: 15_000 });
   return (
     <>
       <PageHeader
@@ -273,7 +298,7 @@ function SlotsDialog({ executor }: { executor: Executor }) {
               name="download_slots"
               type="number"
               min={1}
-              max={32}
+              max={80}
               defaultValue={executor.download_slots}
               required
             />
