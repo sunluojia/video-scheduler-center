@@ -2,18 +2,26 @@
 
 import asyncio
 import io
-from datetime import timedelta
-from uuid import UUID
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from openpyxl import load_workbook
-from sqlalchemy import update
+from sqlalchemy import event, update
 
 from scheduler_center.core.common.clock import utcnow
 from scheduler_center.entrypoints.api import create_app
 from scheduler_center.modules.analysis.models import AnalysisJob, JobStatus
-from scheduler_center.modules.batch.models import Work, WorkStatus
+from scheduler_center.modules.batch.models import Creator, Work, WorkKind, WorkStatus
+from scheduler_center.modules.crawl.models import (
+    CrawlerRunKind,
+    CrawlerRunStatus,
+    CrawlerTask,
+    CrawlerTaskKind,
+    CrawlerTaskRun,
+    CrawlerTaskStatus,
+)
 from scheduler_center.modules.executor.models import ExecutorKind
 from scheduler_center.modules.executor.tables import executors as executor_table
 from scheduler_center.modules.material.models import Material
@@ -171,6 +179,128 @@ async def test_export_downloads_the_delivery_workbook(client, database):
     book = load_workbook(io.BytesIO(response.content))
     assert book.sheetnames == ["成功达人", "失败达人", "待重跑达人"]
     assert book["待重跑达人"]["D2"].value == "尚未爬取完成"
+
+
+async def test_inactivity_tag_in_creator_list_detail_and_export(client, database, app):
+    batch = await new_batch(database, "recorded", "retried", "fallback", "empty", start=False)
+    recorded, retried, fallback, empty = await creators(database, batch)
+    published_at = datetime(2024, 1, 31, 2, tzinfo=UTC)
+    one_month = datetime(2024, 2, 29, 2, tzinfo=UTC)
+    three_months = datetime(2024, 4, 30, 2, tzinfo=UTC)
+    six_months = datetime(2024, 7, 31, 2, tzinfo=UTC)
+    reanalysis = datetime(2025, 7, 31, 2, tzinfo=UTC)
+    async with database.transaction() as session:
+        for member, updated_at in (
+            (recorded, reanalysis),
+            (retried, reanalysis),
+            (fallback, one_month),
+        ):
+            creator = await session.get(Creator, member.id)
+            work = Work(
+                batch.id,
+                creator.id,
+                1,
+                creator.name,
+                f"/photo/{creator.name}",
+                WorkKind.PHOTO,
+                published_at=published_at,
+            )
+            session.add(work)
+            creator.crawled([work], updated_at)
+        (await session.get(Creator, empty.id)).crawled([], reanalysis)
+
+        session.add(
+            CrawlerTask(
+                CrawlerTaskKind.CRAWL,
+                batch.id,
+                recorded.id,
+                {},
+                status=CrawlerTaskStatus.SUCCEEDED,
+                finished_at=three_months,
+            )
+        )
+        task = CrawlerTask(
+            CrawlerTaskKind.CRAWL,
+            batch.id,
+            retried.id,
+            {},
+            run=3,
+            status=CrawlerTaskStatus.FAILED,
+            finished_at=reanalysis,
+        )
+        session.add(task)
+        for run, status, finished in (
+            (1, CrawlerRunStatus.SUCCEEDED, one_month),
+            (2, CrawlerRunStatus.SUCCEEDED, six_months),
+            (3, CrawlerRunStatus.FAILED, reanalysis),
+        ):
+            session.add(
+                CrawlerTaskRun(
+                    task.id,
+                    run,
+                    batch.id,
+                    retried.id,
+                    None,
+                    CrawlerRunKind.CRAWL,
+                    {},
+                    status=status,
+                    updated_at=finished,
+                )
+            )
+        session.add(
+            CrawlerTaskRun(
+                uuid4(),
+                1,
+                batch.id,
+                retried.id,
+                "video",
+                CrawlerRunKind.DOWNLOAD,
+                {},
+                status=CrawlerRunStatus.SUCCEEDED,
+                updated_at=reanalysis,
+            )
+        )
+
+    lookups = []
+
+    def count_crawl_lookups(_connection, _cursor, statement, *_):
+        if "crawler_task_runs" in statement:
+            lookups.append(statement)
+
+    engine = app.state.database.engine.sync_engine
+    path = f"/api/batches/{batch.id}"
+    event.listen(engine, "before_cursor_execute", count_crawl_lookups)
+    try:
+        listing = await client.get(f"{path}/creators")
+        assert listing.is_success
+        assert len(lookups) == 1
+        export = await client.get(f"{path}/export")
+        assert export.is_success
+        assert len(lookups) == 2
+    finally:
+        event.remove(engine, "before_cursor_execute", count_crawl_lookups)
+
+    expected = [
+        ("图文作者", "3个月内未更新"),
+        ("图文作者", "半年内未更新"),
+        ("图文作者", "1个月内未更新"),
+        ("无作品", None),
+    ]
+    rows = listing.json()["items"]
+    assert [row["id"] for row in rows] == [str(c.id) for c in (recorded, retried, fallback, empty)]
+    assert [(row["labels"], row["inactivity_tag"]) for row in rows] == [
+        ([label], tag) for label, tag in expected
+    ]
+    for member, (label, tag) in zip((recorded, retried, fallback, empty), expected, strict=True):
+        detail = await client.get(f"/api/creators/{member.id}")
+        assert detail.is_success
+        assert detail.json()["creator"]["labels"] == [label]
+        assert detail.json()["creator"]["inactivity_tag"] == tag
+
+    sheet = load_workbook(io.BytesIO(export.content), rich_text=True)["成功达人"]
+    assert list(sheet.iter_rows(min_row=3, min_col=14, max_col=15, values_only=True)) == [
+        (label, f"{label}、{tag}" if tag else label) for label, tag in expected
+    ]
 
 
 async def test_creator_detail_shows_the_crawled_profile(client, database):

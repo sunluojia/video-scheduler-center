@@ -8,6 +8,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -76,6 +77,7 @@ class CreatorResult:
     creator: Creator
     works: list[Work]
     qr: bytes | None
+    crawl_finished_at: datetime | None = None
 
 
 def sheet_of(result: CreatorResult) -> str:
@@ -166,7 +168,11 @@ def _success_cells(result: CreatorResult) -> list[str | CellRichText | None]:
     typed_tags: list[str] = []
     if creator.status == CreatorStatus.COMPLETED:
         typed_tags = _summary_tags(creator.labels + (creator.tags or []))
-        typed_text = "、".join(typed_tags) or None
+        display_tags = typed_tags.copy()
+        inactivity_tag = creator.work_inactivity_tag(works, result.crawl_finished_at)
+        if inactivity_tag and inactivity_tag not in display_tags:
+            display_tags.append(inactivity_tag)
+        typed_text = "、".join(display_tags) or None
     else:
         typed_text = creator.note or "汇总未完成"
     ids = "\n".join(work.platform_id for work in succeeded)

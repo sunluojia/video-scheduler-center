@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { $api, type Schemas } from "@/api/client";
 import { AttemptHistory, ExecutorName } from "@/components/attempt-history";
+import { CreatorSummaryTags } from "@/components/creator-summary-tags";
 import { Facts, Notice, PageHeader, Panel, QueryState, Section, Tags } from "@/components/page";
 import { Status, StatusOf } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -114,7 +115,7 @@ export function CreatorDetailPage() {
                           {works.filter((work) => work.status === "completed").length} 条成功的视频
                         </span>
                       </div>
-                      <Tags tags={[...creator.labels, ...(creator.tags ?? [])]} />
+                      <CreatorSummaryTags creator={creator} />
                       {summary.error && (
                         <p className="text-status-failed text-sm">{summary.error}</p>
                       )}
@@ -126,13 +127,7 @@ export function CreatorDetailPage() {
                       />
                     </>
                   ) : (
-                    <p className="text-muted-foreground text-sm">
-                      {creator.labels.length ? (
-                        <Tags tags={creator.labels} />
-                      ) : (
-                        "视频都有结果后自动汇总。"
-                      )}
-                    </p>
+                    <CreatorSummaryTags creator={creator} emptyText="视频都有结果后自动汇总。" />
                   )}
                 </Panel>
               </Section>

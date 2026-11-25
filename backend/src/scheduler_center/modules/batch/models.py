@@ -1,9 +1,11 @@
+from calendar import monthrange
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from scheduler_center.core.common.clock import utcnow
+from scheduler_center.core.common.clock import BEIJING, utcnow
 from scheduler_center.core.common.errors import Conflict
 
 MAX_WORKS = 5
@@ -126,6 +128,40 @@ class Creator:
     """爬取程序最近一次回传的平台资料：账号、主页链接、昵称、平台用户 ID。"""
     updated_at: datetime = field(default_factory=utcnow)
     """最近活动时间，即导出的“采集/识别的最新时间”。"""
+
+    def work_inactivity_tag(
+        self, works: Sequence[Work], crawl_finished_at: datetime | None = None
+    ) -> str | None:
+        """用最近采集时间和最新作品的发布时间计算完整的北京自然月数。"""
+        latest_at = max(
+            (work.published_at for work in works if work.published_at is not None), default=None
+        )
+        if latest_at is None:
+            return None
+
+        latest_at = latest_at.astimezone(BEIJING)
+        ref_at = (crawl_finished_at or self.updated_at).astimezone(BEIJING)
+        months = (ref_at.year - latest_at.year) * 12 + ref_at.month - latest_at.month
+        if months <= 0:
+            return None
+
+        # 保留发布时间的时分秒，目标月没有对应日期时取该月最后一天。
+        last_day = monthrange(ref_at.year, ref_at.month)[1]
+        anniversary = latest_at.replace(
+            year=ref_at.year, month=ref_at.month, day=min(latest_at.day, last_day)
+        )
+        if ref_at < anniversary:
+            months -= 1
+
+        for minimum, tag in (
+            (12, "一年以上未更新"),
+            (6, "半年内未更新"),
+            (3, "3个月内未更新"),
+            (1, "1个月内未更新"),
+        ):
+            if months >= minimum:
+                return tag
+        return None
 
     def __post_init__(self) -> None:
         if self.handle is None:

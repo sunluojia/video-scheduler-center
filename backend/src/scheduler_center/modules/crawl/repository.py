@@ -2,11 +2,17 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from scheduler_center.core.database.repository import Repository
-from scheduler_center.modules.crawl.models import CrawlerTask, CrawlerTaskKind, CrawlerTaskStatus
-from scheduler_center.modules.crawl.tables import crawler_tasks
+from scheduler_center.modules.crawl.models import (
+    CrawlerRunKind,
+    CrawlerRunStatus,
+    CrawlerTask,
+    CrawlerTaskKind,
+    CrawlerTaskStatus,
+)
+from scheduler_center.modules.crawl.tables import crawler_task_runs, crawler_tasks
 
 ACTIVE = (CrawlerTaskStatus.PUBLISHED, CrawlerTaskStatus.ACCEPTED)
 
@@ -18,6 +24,34 @@ class CrawlerTaskRepository(Repository):
             crawler_tasks.c.kind == CrawlerTaskKind.CRAWL,
         )
         return await self._session.scalar(stmt)
+
+    async def latest_crawl_finished_at(
+        self, batch_id: UUID, creator_ids: Sequence[UUID] | None = None
+    ) -> dict[UUID, datetime]:
+        """批量读取最近一次成功采集的完成时间，兼容轮次记录上线前的任务。"""
+        tasks, runs = crawler_tasks.c, crawler_task_runs.c
+        current = select(tasks.creator_id, tasks.finished_at).where(
+            tasks.batch_id == batch_id,
+            tasks.kind == CrawlerTaskKind.CRAWL,
+            tasks.status == CrawlerTaskStatus.SUCCEEDED,
+            tasks.finished_at.is_not(None),
+        )
+        # 成功轮次的 updated_at 与任务完成时间同时写入，重爬时会保留该轮次。
+        history = select(runs.creator_id, runs.updated_at).where(
+            runs.batch_id == batch_id,
+            runs.kind == CrawlerRunKind.CRAWL,
+            runs.status == CrawlerRunStatus.SUCCEEDED,
+        )
+        if creator_ids is not None:
+            if not creator_ids:
+                return {}
+            current = current.where(tasks.creator_id.in_(creator_ids))
+            history = history.where(runs.creator_id.in_(creator_ids))
+        finished = current.union_all(history).subquery().c
+        stmt = select(finished.creator_id, func.max(finished.finished_at)).group_by(
+            finished.creator_id
+        )
+        return dict((await self._session.execute(stmt)).all())
 
     async def download_task(self, work_id: UUID) -> CrawlerTask | None:
         stmt = select(CrawlerTask).where(crawler_tasks.c.work_id == work_id)

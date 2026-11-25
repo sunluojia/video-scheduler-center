@@ -12,7 +12,13 @@ from scheduler_center.core.database.engine import Database
 from scheduler_center.core.web.dependencies import DatabaseDep, LegacyCrawlerDispatchDep, PagingDep
 from scheduler_center.core.web.schemas import Page
 from scheduler_center.modules.analysis.messages import JobState
-from scheduler_center.modules.batch.models import Batch, BatchStatus, CreatorProgress, CreatorStatus
+from scheduler_center.modules.batch.models import (
+    Batch,
+    BatchStatus,
+    CreatorProgress,
+    CreatorStatus,
+    Work,
+)
 from scheduler_center.modules.batch.repository import (
     BatchRepository,
     CreatorRepository,
@@ -28,13 +34,15 @@ from scheduler_center.modules.batch.schemas import (
     WorkView,
 )
 from scheduler_center.modules.batch.service import create_batch
+from scheduler_center.modules.crawl.repository import CrawlerTaskRepository
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.gateway import Gateway
 from scheduler_center.modules.executor.models import ExecutorKind
 from scheduler_center.modules.flow.diagnostics import batch_attempts, build_attempt_csv
 from scheduler_center.modules.flow.service import Flow
-from scheduler_center.modules.report.exporter import CreatorResult, build_workbook
+from scheduler_center.modules.report.exporter import build_workbook
 from scheduler_center.modules.report.importer import read_roster
+from scheduler_center.modules.report.service import load_creator_results
 
 router = APIRouter(prefix="/batches", tags=["批次"])
 job_states = TypeAdapter(list[JobState])
@@ -150,18 +158,27 @@ async def list_creators(
         items, total = await CreatorRepository(session).search(
             batch_id, status, q, paging.offset, paging.size, progress=progress
         )
-        works = await WorkRepository(session).of_creators([item.id for item, _ in items])
-    works_of: dict[UUID, list[WorkView]] = defaultdict(list)
-    for work in works:
-        works_of[work.creator_id].append(WorkView.model_validate(work))
-    rows = [
-        CreatorRow(
-            **CreatorView.model_validate(item).model_dump(),
-            progress=stage,
-            works=works_of.get(item.id, []),
+        creator_ids = [item.id for item, _ in items]
+        works = await WorkRepository(session).of_creators(creator_ids)
+        crawl_finished_at = await CrawlerTaskRepository(session).latest_crawl_finished_at(
+            batch_id, creator_ids
         )
-        for item, stage in items
-    ]
+    works_of: dict[UUID, list[Work]] = defaultdict(list)
+    for work in works:
+        works_of[work.creator_id].append(work)
+    rows = []
+    for item, stage in items:
+        creator_works = works_of[item.id]
+        rows.append(
+            CreatorRow(
+                **CreatorView.model_validate(item).model_dump(),
+                inactivity_tag=item.work_inactivity_tag(
+                    creator_works, crawl_finished_at.get(item.id)
+                ),
+                progress=stage,
+                works=[WorkView.model_validate(work) for work in creator_works],
+            )
+        )
     return Page(items=rows, total=total)
 
 
@@ -174,17 +191,7 @@ async def export(batch_id: UUID, database: DatabaseDep) -> Response:
     """导出交付表；批次进行中也可以导出当前结果。"""
     async with database.transaction() as session:
         batch = await BatchRepository(session).require(Batch, batch_id)
-        creators = CreatorRepository(session)
-        members = await creators.of_batch(batch.id)
-        works = await WorkRepository(session).of_batch(batch.id)
-        qr_codes = await creators.qr_of_batch(batch.id)
-    works_of = defaultdict(list)
-    for work in works:
-        works_of[work.creator_id].append(work)
-    results = [
-        CreatorResult(creator, works_of[creator.id], qr_codes.get(creator.id))
-        for creator in members
-    ]
+        results = await load_creator_results(session, batch.id)
     content = await anyio.to_thread.run_sync(build_workbook, results)
     filename = quote(f"{batch.name}-达人标签结果.xlsx")
     return Response(

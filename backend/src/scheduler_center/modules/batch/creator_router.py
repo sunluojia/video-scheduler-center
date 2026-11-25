@@ -12,7 +12,7 @@ from scheduler_center.modules.batch.repository import (
     CreatorRepository,
     WorkRepository,
 )
-from scheduler_center.modules.batch.schemas import CreatorDetail, CreatorView
+from scheduler_center.modules.batch.schemas import CreatorDetail, CreatorSummaryView, CreatorView
 from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.crawl.repository import CrawlerTaskRepository
 from scheduler_center.modules.flow.history import EventLog
@@ -25,13 +25,21 @@ router = APIRouter(prefix="/creators", tags=["达人"])
 async def get_creator(creator_id: UUID, database: DatabaseDep) -> CreatorDetail:
     async with database.transaction() as session:
         creator = await CreatorRepository(session).require(Creator, creator_id)
-        crawl = await CrawlerTaskRepository(session).crawl_task(creator.id)
+        tasks = CrawlerTaskRepository(session)
+        crawl = await tasks.crawl_task(creator.id)
+        crawl_finished_at = await tasks.latest_crawl_finished_at(creator.batch_id, [creator.id])
+        works = await WorkRepository(session).of_creator(creator.id)
         summary = await AnalysisJobRepository(session).summary(creator.id)
         return CreatorDetail(
-            creator=creator,
+            creator=CreatorSummaryView(
+                **CreatorView.model_validate(creator).model_dump(),
+                inactivity_tag=creator.work_inactivity_tag(
+                    works, crawl_finished_at.get(creator.id)
+                ),
+            ),
             batch=await BatchRepository(session).require(Batch, creator.batch_id),
             crawl=crawl,
-            works=await WorkRepository(session).of_creator(creator.id),
+            works=works,
             summary=summary,
             crawl_attempts=await CrawlerAttempts(session).of_tasks([crawl.id]) if crawl else [],
             summary_attempts=await AnalysisAttempts(session).of_jobs([summary.id])

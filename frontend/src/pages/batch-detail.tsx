@@ -22,6 +22,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { $api, errorText, fetchClient, type Schemas } from "@/api/client";
 import { Confirm } from "@/components/confirm";
+import { CreatorSummaryTags } from "@/components/creator-summary-tags";
 import { DataTable, Pager } from "@/components/data-table";
 import { Elapsed, Panel, QueryState, Tags } from "@/components/page";
 import { Legend, SegmentBar, StatusOf } from "@/components/status";
@@ -581,7 +582,7 @@ function Creators({
                         <WorkSlots works={creator.works} />
                       </TableCell>
                       <TableCell className="py-1.5">
-                        <Tags tags={[...creator.labels, ...(creator.tags ?? [])]} max={6} />
+                        <CreatorSummaryTags creator={creator} max={6} />
                       </TableCell>
                       <TableCell className="text-muted-foreground max-w-64 py-1.5 text-xs">
                         <span className="line-clamp-2">{creator.note}</span>

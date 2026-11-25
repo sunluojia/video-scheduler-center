@@ -351,6 +351,41 @@ def test_export_type_summary_uses_only_creator_tags_and_labels():
     assert sheet["N3"].value == "图文作者、#拉丁裔、#热门"
 
 
+@pytest.mark.parametrize("already_present", [False, True])
+def test_export_adds_inactivity_only_to_completed_type_summary(already_present):
+    tag = "3个月内未更新"
+    tags = ["穿搭", tag] if already_present else ["穿搭"]
+    done = creator(1, "done", CreatorStatus.COMPLETED, labels=["图文作者"], tags=tags)
+    partial = creator(2, "partial", CreatorStatus.ANALYZING)
+    crawl_finished_at = datetime(2024, 4, 30, 2, tzinfo=UTC)
+    published_at = datetime(2024, 1, 31, 2, tzinfo=UTC)
+    results = [
+        CreatorResult(
+            done,
+            [
+                work(done, 1, WorkStatus.COMPLETED, published_at=published_at, tags=["穿搭"]),
+                work(done, 2, WorkStatus.SKIPPED, kind=WorkKind.PHOTO),
+            ],
+            None,
+            crawl_finished_at=crawl_finished_at,
+        ),
+        CreatorResult(
+            partial,
+            [work(partial, 1, WorkStatus.COMPLETED, published_at=published_at, tags=["穿搭"])],
+            None,
+            crawl_finished_at=crawl_finished_at,
+        ),
+    ]
+
+    sheet = load_workbook(io.BytesIO(build_workbook(results)), rich_text=True)["成功达人"]
+
+    assert isinstance(sheet["N3"].value, str)
+    assert sheet["N3"].value == "图文作者、穿搭"
+    assert sheet["O3"].value == f"图文作者、穿搭、{tag}"
+    assert sheet["O4"].value == "汇总未完成"
+    assert tag not in str(sheet["N4"].value)
+
+
 def creator(position: int, name: str, status: CreatorStatus, **fields) -> Creator:
     value = Creator(uuid4(), position, position + 1, name, name, f"700000000000000000{position}")
     value.status = status

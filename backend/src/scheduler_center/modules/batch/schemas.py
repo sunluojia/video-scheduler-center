@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scheduler_center.core.web.schemas import View
 from scheduler_center.modules.analysis.models import JobKind, JobStatus, StageStatus
@@ -69,6 +69,14 @@ class CreatorView(View):
     updated_at: datetime
 
 
+class CreatorSummaryView(CreatorView):
+    inactivity_tag: str | None = Field(
+        default=None,
+        description="按采集时间与最新作品发布时间计算的未更新标签。",
+        json_schema_extra={"readOnly": True},
+    )
+
+
 class WorkView(View):
     id: UUID
     batch_id: UUID
@@ -86,7 +94,7 @@ class WorkView(View):
     updated_at: datetime
 
 
-class CreatorRow(CreatorView):
+class CreatorRow(CreatorSummaryView):
     progress: CreatorProgress
     works: list[WorkView]
     """锁定的作品，按位置排列。"""
@@ -188,7 +196,7 @@ class EventView(View):
 
 
 class CreatorDetail(BaseModel):
-    creator: CreatorView
+    creator: CreatorSummaryView
     batch: BatchView
     crawl: CrawlerTaskView | None
     works: list[WorkView]

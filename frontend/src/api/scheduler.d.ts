@@ -1632,7 +1632,7 @@ export interface components {
         };
         /** CreatorDetail */
         CreatorDetail: {
-            creator: components["schemas"]["CreatorView"];
+            creator: components["schemas"]["CreatorSummaryView"];
             batch: components["schemas"]["BatchView"];
             crawl: components["schemas"]["CrawlerTaskView"] | null;
             /** Works */
@@ -1693,6 +1693,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Inactivity Tag
+             * @description 按采集时间与最新作品发布时间计算的未更新标签。
+             */
+            readonly inactivity_tag?: string | null;
             progress: components["schemas"]["CreatorProgress"];
             /** Works */
             works: components["schemas"]["WorkView"][];
@@ -1702,6 +1707,47 @@ export interface components {
          * @enum {string}
          */
         CreatorStatus: "pending" | "crawling" | "analyzing" | "summarizing" | "completed" | "failed" | "recrawl" | "invalid";
+        /** CreatorSummaryView */
+        CreatorSummaryView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            /** Position */
+            position: number;
+            /** Row */
+            row: number | null;
+            /** Name */
+            name: string;
+            /** Handle */
+            handle: string | null;
+            /** Oecuid */
+            oecuid: string | null;
+            status: components["schemas"]["CreatorStatus"];
+            /** Note */
+            note: string | null;
+            /** Labels */
+            labels: string[];
+            /** Tags */
+            tags: string[] | null;
+            profile: components["schemas"]["CrawledProfile"] | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Inactivity Tag
+             * @description 按采集时间与最新作品发布时间计算的未更新标签。
+             */
+            readonly inactivity_tag?: string | null;
+        };
         /** CreatorView */
         CreatorView: {
             /**
