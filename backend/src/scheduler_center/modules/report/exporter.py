@@ -4,6 +4,7 @@
 """
 
 import math
+import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -27,6 +28,35 @@ from scheduler_center.modules.batch.models import (
 
 SUCCESS, FAILED, RETRY = "成功达人", "失败达人", "待重跑达人"
 TOPIC_MARKS = ("#", "＃")
+TAG_ALIASES = {
+    "肢体出镜": "仅肢体出镜",
+    "女性呈现": "女性",
+    "男性呈现": "男性",
+    "中性呈现": "中性",
+}
+OMITTED_TAG_PREFIXES = ("视频时长", "无明显", "不确定", "没有", "未见", "采样未见", "无法", "未知")
+OMITTED_TAGS = {
+    "不适用",
+    "无",
+    "无宠物",
+    "无小孩",
+    "无妆容",
+    "无化妆",
+    "无美甲",
+    "无滤镜",
+    "其它",
+    "其它室内",
+    "其它室外",
+    "其它户外",
+    "其他",
+    "其他室内",
+    "其他室外",
+    "其他户外",
+}
+ON_CAMERA_TAGS = {"仅肢体出镜", "无人出镜", "人脸出镜"}
+ON_CAMERA_COUNT = re.compile(r"(?:\d+|[一二两三四五六七八九十百千万]+|多)人出镜")
+IDENTITY_TAG_SUFFIXES = ("裔", "族", "族群", "国人", "国籍", "公民", "人士")
+IDENTITY_TAGS = {"白人", "黑人", "华人", "原住民", "印度人", "移民", "留学生"}
 PENDING_REASONS = {
     CreatorStatus.PENDING: "批次尚未开始",
     CreatorStatus.CRAWLING: "尚未爬取完成",
@@ -133,9 +163,9 @@ def _success_cells(result: CreatorResult) -> list[str | CellRichText | None]:
         cells += [work.url, _work_tag(work)] if work else [None, shortage]
     succeeded = [work for work in works if work.status == WorkStatus.COMPLETED]
     text_tags = creator.labels + [tag for work in succeeded for tag in work.tags or []]
-    typed_tags: dict[str, None] = {}
+    typed_tags: list[str] = []
     if creator.status == CreatorStatus.COMPLETED:
-        typed_tags = dict.fromkeys(_summary_tags(creator.labels + (creator.tags or [])))
+        typed_tags = _summary_tags(creator.labels + (creator.tags or []))
         typed_text = "、".join(typed_tags) or None
     else:
         typed_text = creator.note or "汇总未完成"
@@ -148,7 +178,10 @@ def _work_tag(work: Work) -> str:
         case WorkStatus.SKIPPED:
             return "图文作者"
         case WorkStatus.COMPLETED:
-            return "、".join(_without_duration(work.tags or [])) or "未识别出标签"
+            tags = dict.fromkeys(_export_tags(work.tags or []))
+            if "人脸出镜" in tags:
+                tags.pop("仅肢体出镜", None)
+            return "、".join(tags) or "未识别出标签"
         case WorkStatus.DOWNLOADING | WorkStatus.ANALYZING:
             return "处理中"
         case WorkStatus.ABANDONED:
@@ -156,19 +189,50 @@ def _work_tag(work: Work) -> str:
     return work.error or "失败"
 
 
-def _without_duration(tags: list[str]) -> list[str]:
-    return [tag for tag in tags if not tag.lstrip().startswith("视频时长")]
+def _export_tags(tags: list[str]) -> list[str]:
+    exported = []
+    for raw_tag in tags:
+        tag = raw_tag.strip()
+        if not tag or tag in OMITTED_TAGS or tag.startswith(OMITTED_TAG_PREFIXES):
+            continue
+        tag = TAG_ALIASES.get(tag, tag)
+        if (
+            tag.endswith("出镜")
+            and not tag.startswith(TOPIC_MARKS)
+            and tag not in ON_CAMERA_TAGS
+            and not ON_CAMERA_COUNT.fullmatch(tag)
+        ):
+            continue
+        exported.append(tag)
+    return exported
 
 
 def _summary_tags(tags: list[str]) -> list[str]:
+    unique = dict.fromkeys(_export_tags(tags))
+    conflicting_negatives = {f"无{tag[1:]}" for tag in unique if tag.startswith("有")} - {
+        "无人出镜",
+        "无口播",
+    }
     return sorted(
-        dict.fromkeys(_without_duration(tags)), key=lambda tag: tag.startswith(TOPIC_MARKS)
+        (tag for tag in unique if tag not in conflicting_negatives),
+        key=lambda tag: tag.startswith(TOPIC_MARKS),
     )
 
 
-def _text_tag_cell(tags: list[str], typed_tags: dict[str, None]) -> str | CellRichText | None:
+def _type_match_key(tag: str) -> str:
+    """仅在匹配标红时，允许身份标签带话题前缀。"""
+    if tag.startswith(TOPIC_MARKS):
+        value = tag[1:].lstrip()
+        if value in IDENTITY_TAGS or value.endswith(IDENTITY_TAG_SUFFIXES):
+            return value
+    return tag
+
+
+def _text_tag_cell(tags: list[str], typed_tags: list[str]) -> str | CellRichText | None:
     ordered = _summary_tags(tags)
-    if all(tag in typed_tags for tag in ordered):
+    typed_keys = {_type_match_key(tag) for tag in typed_tags}
+    missing = {tag for tag in ordered if _type_match_key(tag) not in typed_keys}
+    if not missing:
         return "、".join(ordered) or None
 
     runs: list[str | TextBlock] = []
@@ -176,7 +240,7 @@ def _text_tag_cell(tags: list[str], typed_tags: dict[str, None]) -> str | CellRi
     for index, tag in enumerate(ordered):
         if index:
             plain.append("、")
-        if tag in typed_tags:
+        if tag not in missing:
             plain.append(tag)
         else:
             if plain:

@@ -229,6 +229,128 @@ def test_export_sorts_topics_and_colors_only_tags_missing_from_type_summary():
     ]
 
 
+def test_export_cleans_historical_tags_in_works_and_both_totals():
+    hidden = [
+        "  无明显美甲 ",
+        "不确定场景",
+        "没有美甲",
+        "未见小孩",
+        "采样未见健身",
+        "无宠物",
+        "无小孩",
+        "无妆容",
+        "无滤镜",
+        "无法判断肤色",
+        "动物出镜",
+        "宠物出镜",
+        "儿童出镜",
+        "无人脸出镜",
+        "青少年出镜",
+        "真人出镜",
+        "其它",
+        "其它室内",
+        "其它室外",
+        "其它户外",
+        "其他",
+        "其他室内",
+        "其他室外",
+        "其他户外",
+    ]
+    tags = [*hidden, "女性呈现", "男性呈现", "中性呈现", "有宠物", "有小孩", "无袖上衣"]
+    other_tags = ["无人出镜", "无口播"]
+    owner = creator(1, "done", CreatorStatus.COMPLETED, tags=tags + other_tags)
+    works = [
+        work(owner, 1, WorkStatus.COMPLETED, tags=tags),
+        work(owner, 2, WorkStatus.COMPLETED, tags=other_tags),
+        work(owner, 3, WorkStatus.COMPLETED, tags=hidden),
+    ]
+
+    data = build_workbook([CreatorResult(owner, works, None)])
+    sheet = load_workbook(io.BytesIO(data), rich_text=True)["成功达人"]
+
+    assert sheet["E3"].value == "女性、男性、中性、有宠物、有小孩、无袖上衣"
+    assert sheet["G3"].value == "无人出镜、无口播"
+    assert sheet["I3"].value == "未识别出标签"
+    expected_totals = "女性、男性、中性、有宠物、有小孩、无袖上衣、无人出镜、无口播"
+    assert sheet["N3"].value == sheet["O3"].value == expected_totals
+    assert "没有美甲" in (works[0].tags or [])
+    assert "女性呈现" in (owner.tags or [])
+
+
+def test_export_keeps_body_and_face_tags_in_type_summary_but_not_in_the_same_work():
+    face_tags = ["肢体出镜", "人脸出镜", "仅肢体出镜", "2人出镜"]
+    body_tags = ["肢体出镜", "仅肢体出镜", "多人出镜"]
+    owner = creator(1, "done", CreatorStatus.COMPLETED, tags=face_tags + body_tags)
+    works = [
+        work(owner, 1, WorkStatus.COMPLETED, tags=face_tags),
+        work(owner, 2, WorkStatus.COMPLETED, tags=body_tags),
+    ]
+    data = build_workbook([CreatorResult(owner, works, None)])
+    sheet = load_workbook(io.BytesIO(data))["成功达人"]
+
+    assert sheet["E3"].value == "人脸出镜、2人出镜"
+    assert sheet["G3"].value == "仅肢体出镜、多人出镜"
+    assert sheet["O3"].value == "仅肢体出镜、人脸出镜、2人出镜、多人出镜"
+
+
+def test_export_totals_prefer_positive_existence_tags():
+    negative = ["无明显美甲", "没有美甲", "无美甲", "无配饰"]
+    positive = ["有美甲", "有配饰"]
+    owner = creator(1, "done", CreatorStatus.COMPLETED, tags=negative + positive)
+    works = [
+        work(owner, 1, WorkStatus.COMPLETED, tags=negative),
+        work(owner, 2, WorkStatus.COMPLETED, tags=positive),
+    ]
+    data = build_workbook([CreatorResult(owner, works, None)])
+    sheet = load_workbook(io.BytesIO(data), rich_text=True)["成功达人"]
+
+    assert sheet["N3"].value == sheet["O3"].value == "有美甲、有配饰"
+
+
+@pytest.mark.parametrize(
+    ("summary_tag", "work_tag", "expected_types"),
+    [
+        ("拉丁裔", "#拉丁裔", "拉丁裔、美妆"),
+        ("#拉丁裔", "#拉丁裔", "美妆、#拉丁裔"),
+        ("＃拉丁裔", "#拉丁裔", "美妆、＃拉丁裔"),
+        ("玛雅族", "#玛雅族", "玛雅族、美妆"),
+        ("美国籍", "＃美国籍", "美国籍、美妆"),
+        ("留学生", "#留学生", "留学生、美妆"),
+    ],
+)
+def test_export_matches_identity_topics_to_type_summary(summary_tag, work_tag, expected_types):
+    owner = creator(1, "done", CreatorStatus.COMPLETED, tags=[summary_tag, "美妆"])
+    entry = work(
+        owner,
+        1,
+        WorkStatus.COMPLETED,
+        tags=[work_tag, "#热门", "美妆", "#好物分享", "#TikTokShop"],
+    )
+    data = build_workbook([CreatorResult(owner, [entry], None)])
+    sheet = load_workbook(io.BytesIO(data), rich_text=True)["成功达人"]
+
+    assert sheet["O3"].value == expected_types
+    assert sheet["E3"].value == f"{work_tag}、#热门、美妆、#好物分享、#TikTokShop"
+    text = sheet["N3"].value
+    assert isinstance(text, CellRichText)
+    assert str(text) == f"美妆、{work_tag}、#热门、#好物分享、#TikTokShop"
+    assert [(run.text, run.font.color.rgb) for run in text if isinstance(run, TextBlock)] == [
+        ("#热门", "FFFF0000"),
+        ("#好物分享", "FFFF0000"),
+        ("#TikTokShop", "FFFF0000"),
+    ]
+
+
+def test_export_type_summary_uses_only_creator_tags_and_labels():
+    owner = creator(1, "done", CreatorStatus.COMPLETED, labels=["图文作者"])
+    entry = work(owner, 1, WorkStatus.COMPLETED, tags=["#拉丁裔", "#热门"])
+    data = build_workbook([CreatorResult(owner, [entry], None)])
+    sheet = load_workbook(io.BytesIO(data))["成功达人"]
+
+    assert sheet["O3"].value == "图文作者"
+    assert sheet["N3"].value == "图文作者、#拉丁裔、#热门"
+
+
 def creator(position: int, name: str, status: CreatorStatus, **fields) -> Creator:
     value = Creator(uuid4(), position, position + 1, name, name, f"700000000000000000{position}")
     value.status = status
