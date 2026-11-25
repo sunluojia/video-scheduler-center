@@ -82,8 +82,10 @@ class Dispatcher:
         in_use = await self._leases.in_use(now, use=use, keys=list(candidates))
         usable = [key for key in candidates if lines[key].state(now) in _USABLE]
 
+        line_limit = rule.device_line_limit or cluster.line_limit
+
         def capacity(key: str) -> int:
-            return 1 if lines[key].state(now) == LineState.PROBING else cluster.line_limit
+            return 1 if lines[key].state(now) == LineState.PROBING else line_limit
 
         free = [key for key in usable if in_use.get(key, 0) < capacity(key)]
         if free:
@@ -175,7 +177,7 @@ class Dispatcher:
             return {device_line(device, rule.local_port): Candidate(None)}
         folders = tree_order(await self._folders.all())
         rank = {folder.id: index for index, folder in enumerate(folders)}
-        proxies = await self._proxies.serving(use)
+        proxies = await self._proxies.serving(use, device=device)
         proxies.sort(key=lambda proxy: rank.get(proxy.folder_id, len(rank)))
         if rule.targets is None:
             scope = subtree(folders, rule.folder_id) if rule.folder_id else None

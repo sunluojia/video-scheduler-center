@@ -89,7 +89,7 @@ class ProxyRepository(Repository):
             stmt = stmt.with_for_update(key_share=True).execution_options(populate_existing=True)
         return list(await self._session.scalars(stmt))
 
-    async def serving(self, use: Use) -> list[Proxy]:
+    async def serving(self, use: Use, *, device: str | None = None) -> list[Proxy]:
         """能分配给这个用途的代理：带这个用途、已启用、测试通过且出口已知。"""
         stmt = (
             select(Proxy)
@@ -101,7 +101,13 @@ class ProxyRepository(Repository):
             )
             .order_by(proxies.c.created_at)
         )
+        if device is not None:
+            stmt = stmt.where(self._for_devices([device]))
         return list(await self._session.scalars(stmt))
+
+    @staticmethod
+    def _for_devices(devices: Sequence[str]):
+        return or_(proxies.c.bound_device.is_(None), proxies.c.bound_device.in_(devices))
 
     async def existing(self) -> set[tuple[str, int, str]]:
         """已有代理的主机、端口和用户名，用来标出重复。"""
@@ -135,7 +141,7 @@ class ProxyRepository(Repository):
         stmt = update(proxies).where(proxies.c.id.in_(ids)).values(folder_id=folder_id)
         return (await self._session.execute(stmt)).rowcount
 
-    async def due_tests(self, now: datetime, limit: int) -> list[Proxy]:
+    async def due_tests(self, now: datetime, limit: int, devices: Sequence[str]) -> list[Proxy]:
         """到了测试时间的代理；刷新中的要等它的线路都归还。其他 Worker 领走、还没到期的跳过。"""
         busy = select(proxy_leases.c.proxy_id).where(
             _open(now), proxy_leases.c.proxy_id.isnot(None)
@@ -144,6 +150,7 @@ class ProxyRepository(Repository):
             select(Proxy)
             .where(
                 proxies.c.test_at <= now,
+                self._for_devices(devices),
                 or_(proxies.c.testing_until.is_(None), proxies.c.testing_until <= now),
                 or_(proxies.c.status != ProxyStatus.REFRESHING, proxies.c.id.not_in(busy)),
             )
@@ -153,11 +160,13 @@ class ProxyRepository(Repository):
         )
         return list(await self._session.scalars(stmt))
 
-    async def due_speed_tests(self, now: datetime, limit: int) -> list[Proxy]:
+    async def due_speed_tests(
+        self, now: datetime, limit: int, devices: Sequence[str]
+    ) -> list[Proxy]:
         """到了测速时间的代理；其他 Worker 正在测的跳过。"""
         stmt = (
             select(Proxy)
-            .where(proxies.c.speed_at <= now)
+            .where(proxies.c.speed_at <= now, self._for_devices(devices))
             .order_by(proxies.c.speed_at)
             .limit(limit)
             .with_for_update(skip_locked=True, key_share=True)

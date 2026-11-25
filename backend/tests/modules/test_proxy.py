@@ -1030,3 +1030,63 @@ async def test_alerts_point_at_what_needs_a_person(client, service, database):
 async def all_proxies(database) -> list[Proxy]:
     async with database.transaction() as session:
         return list(await session.scalars(select(Proxy).order_by(proxies.c.host)))
+
+
+async def test_a_device_bound_pool_respects_its_limit_without_capping_direct_devices(
+    client, service, database
+):
+    pool_id = await folder(client, "设备 B 下载")
+    proxy = await client.post(
+        "/api/proxies",
+        json={
+            "host": "127.0.0.1",
+            "port": 26401,
+            "protocol": "socks5",
+            "uses": [DOWNLOAD],
+            "folder_id": pool_id,
+            "bound_device": "crawler-b",
+        },
+    )
+    assert proxy.status_code == 201
+    assert proxy.json()["bound_device"] == "crawler-b"
+    await passed(database, {"127.0.0.1": "203.0.113.1"})
+    await use_pool(client, line_limit=4)
+    pool_rule = f"/api/proxy-uses/{DOWNLOAD}/devices/crawler-b"
+    body = {"source": "pool", "folder_id": pool_id}
+    assert (await client.put(pool_rule, json={**body, "line_limit": 1})).status_code == 200
+    assert (await client.put(pool_rule, json=body)).json()["device_line_limit"] == 1
+    assert line_of(await lease(service, "crawler-b")) == "203.0.113.1"
+    assert line_of(await lease(service, "crawler-b")) is None
+    assert line_of(await lease(service, "crawler-other")) is None
+
+    route = f"/api/proxy-uses/{DOWNLOAD}/devices/crawler-a"
+    assert (await client.put(route, json={"source": "direct"})).status_code == 200
+    for _ in range(4):
+        assert (await lease(service, "crawler-a"))["lease"]["route"]["kind"] == "direct"
+    assert line_of(await lease(service, "crawler-a")) is None
+
+
+async def test_connectivity_and_speed_tests_use_only_the_bound_device(
+    client, database, database_url, tmp_path, executors
+):
+    owner = "crawler-b"
+    response = await client.post(
+        "/api/proxies",
+        json={"host": "127.0.0.1", "port": 26401, "bound_device": owner},
+    )
+    assert response.status_code == 201
+    proxy_id = response.json()["id"]
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL)
+    worker = build_worker(database, database_url, tmp_path, executors)
+    assert await worker.proxies.test_due() == 0
+    await register(database, ExecutorKind.CRAWLER, "http://crawler-b.test", instance_id=owner)
+    executors.responses["POST", "/api/proxy-tests"] = ok(proxy_id, "203.0.113.1")
+    assert await worker.proxies.test_due() == 1
+    assert executors.requests[-1].url.host == "crawler-b.test"
+
+    assert (await client.post("/api/proxies/speed", json={"ids": [proxy_id]})).status_code == 200
+    executors.responses["POST", "/api/proxy-speed"] = httpx.Response(
+        200, json={"key": proxy_id, "single_mbps": 18.9}
+    )
+    assert await worker.proxies.speed_due() == 1
+    assert executors.requests[-1].url.host == "crawler-b.test"

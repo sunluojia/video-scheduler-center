@@ -1818,6 +1818,18 @@ export interface components {
             in_use: number;
             line: components["schemas"]["LineView"] | null;
         };
+        /** DeviceRuleIn */
+        DeviceRuleIn: {
+            source: components["schemas"]["RuleSource"];
+            /** Folder Id */
+            folder_id?: string | null;
+            /** Local Port */
+            local_port?: number | null;
+            /** Targets */
+            targets?: components["schemas"]["RuleTargetIn"][] | null;
+            /** Line Limit */
+            line_limit?: number | null;
+        };
         /** DownloadTransfer */
         DownloadTransfer: {
             /**
@@ -2414,6 +2426,8 @@ export interface components {
             folder_id?: string | null;
             /** Uses */
             uses?: (components["schemas"]["Service"] | components["schemas"]["Use"])[];
+            /** Bound Device */
+            bound_device?: string | null;
         };
         /**
          * ProxyPatch
@@ -2497,6 +2511,8 @@ export interface components {
             tested_at: string | null;
             /** Tested By */
             tested_by: string | null;
+            /** Bound Device */
+            bound_device?: string | null;
             /** Speed Testing */
             speed_testing: boolean;
             /** Speed Mbps */
@@ -2594,16 +2610,6 @@ export interface components {
             /** Host Key */
             host_key?: string | null;
         };
-        /** RuleIn */
-        RuleIn: {
-            source: components["schemas"]["RuleSource"];
-            /** Folder Id */
-            folder_id?: string | null;
-            /** Local Port */
-            local_port?: number | null;
-            /** Targets */
-            targets?: components["schemas"]["RuleTargetIn"][] | null;
-        };
         /**
          * RuleSource
          * @enum {string}
@@ -2661,6 +2667,8 @@ export interface components {
             mode: components["schemas"]["PickMode"];
             /** Line Limit */
             line_limit: number;
+            /** Device Line Limit */
+            device_line_limit?: number | null;
             /** Targets */
             targets: components["schemas"]["RuleTargetView"][] | null;
             /**
@@ -4529,7 +4537,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RuleIn"];
+                "application/json": components["schemas"]["DeviceRuleIn"];
             };
         };
         responses: {

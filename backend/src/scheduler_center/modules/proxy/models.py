@@ -185,6 +185,8 @@ class Proxy:
     speed_tested_at: datetime | None = None
     speed_error: str | None = None
     created_at: datetime = field(default_factory=utcnow)
+    bound_device: str | None = None
+    """仅能由这台设备测试和使用，适用于本机监听或设备专属的代理。"""
     config_revision: UUID | None = None
     """改过连接配置或开始刷新出口时更新，用来识别旧租约。"""
 
@@ -337,6 +339,8 @@ class ProxyRule:
     mode: PickMode = PickMode.PRIORITY
     """先用哪条和每条线路的同时数只在集群规则里设置。"""
     line_limit: int = 2
+    device_line_limit: int | None = None
+    """设备的每线路并发上限；为空时沿用集群上限。"""
     cursor: str | None = None
     """轮询时上一次分配的线路。"""
     updated_at: datetime = field(default_factory=utcnow)

@@ -13,7 +13,7 @@ export function ruleTargets(
     : null;
 }
 
-export function targetsBody(targets: Schemas["RuleView"]["targets"]): Schemas["RuleIn"]["targets"] {
+export function targetsBody(targets: Schemas["RuleView"]["targets"]): Schemas["DeviceRuleIn"]["targets"] {
   return (
     targets?.map(({ kind, id, priority, weight }) => ({
       kind,

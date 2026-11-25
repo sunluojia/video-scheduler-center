@@ -83,6 +83,7 @@ proxies = Table(
     Column("speed_error", Text),
     Column("created_at", timestamp(), nullable=False),
     Column("config_revision", Uuid),
+    Column("bound_device", String(128)),
     UniqueConstraint("host", "port", "username"),
 )
 
@@ -96,6 +97,7 @@ proxy_rules = Table(
     Column("local_port", Integer),
     Column("mode", enum_column(PickMode), nullable=False),
     Column("line_limit", Integer, nullable=False),
+    Column("device_line_limit", Integer),
     Column("cursor", String(160)),
     Column("updated_at", timestamp(), nullable=False),
     Column("targets", JSONB(none_as_null=True)),

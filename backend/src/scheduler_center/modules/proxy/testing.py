@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
+from itertools import cycle
 from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
@@ -73,23 +75,28 @@ class ProxyTester:
             devices = await self._online(session, now)
             if not devices:
                 return 0
-            due = await ProxyRepository(session).due_tests(now, BATCH * len(devices))
-            items = [
-                CheckItem.of(proxy, refresh=proxy.status == ProxyStatus.REFRESHING) for proxy in due
-            ]
+            by_name = {device.instance_id: device for device in devices}
+            due = await ProxyRepository(session).due_tests(now, BATCH * len(devices), list(by_name))
+            rotation = cycle(by_name)
+            assigned: dict[str, list[CheckItem]] = defaultdict(list)
             claim = now + TEST_CLAIM
             for proxy in due:
+                name = proxy.bound_device or next(rotation)
+                if len(assigned[name]) >= BATCH:
+                    continue
+                assigned[name].append(
+                    CheckItem.of(proxy, refresh=proxy.status == ProxyStatus.REFRESHING)
+                )
                 proxy.testing_until = claim
-        if not items:
+        if not assigned:
             return 0
-        shares = [(device, items[index :: len(devices)]) for index, device in enumerate(devices)]
-        shares = [(device, share) for device, share in shares if share]
+        shares = [(by_name[name], items) for name, items in assigned.items()]
         results = await asyncio.gather(*(self._run(device, share) for device, share in shares))
         async with self._database.transaction() as session:
             found = {
                 str(proxy.id): proxy
                 for proxy in await ProxyRepository(session).of_ids(
-                    [UUID(item.key) for item in items], lock=True
+                    [UUID(item.key) for _, items in shares for item in items], lock=True
                 )
             }
             finished = utcnow()
@@ -113,21 +120,22 @@ class ProxyTester:
                     else:
                         proxy.test_at, proxy.testing_until = finished + RETRY, None
             await Live(session).proxies_changed()
-        return len(items)
+        return sum(len(items) for _, items in shares)
 
     async def speed_due(self) -> int:
         """每台在线设备一次只测一个代理：同一台设备上同时测会互相抢带宽，测不准。"""
         now = utcnow()
         async with self._database.transaction() as session:
             devices = await self._online(session, now)
-            due = await ProxyRepository(session).due_speed_tests(now, len(devices))
-            pairs = [
-                (device, CheckItem.of(proxy, refresh=False))
-                for device, proxy in zip(devices, due, strict=False)
-            ]
+            available = {device.instance_id: device for device in devices}
+            due = await ProxyRepository(session).due_speed_tests(now, len(devices), list(available))
+            pairs = []
             claim = now + SPEED_TIMEOUT  # 测速期间页面仍显示在测；Worker 中途退出时到期重测
-            for proxy in due:
-                proxy.speed_at = claim
+            for proxy in sorted(due, key=lambda item: item.bound_device is None):
+                name = proxy.bound_device or next(iter(available), None)
+                if name is not None and (device := available.pop(name, None)) is not None:
+                    pairs.append((device, CheckItem.of(proxy, refresh=False)))
+                    proxy.speed_at = claim
         if not pairs:
             return 0
         results = await asyncio.gather(*(self._speed(device, item) for device, item in pairs))

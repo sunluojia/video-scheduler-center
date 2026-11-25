@@ -44,6 +44,7 @@ class ProxyIn(BaseModel):
     refresh_url: str | None = Field(None, max_length=2000)
     folder_id: UUID | None = None
     uses: Tags = Field(default_factory=list)
+    bound_device: str | None = Field(None, min_length=1, max_length=128)
 
 
 class ProxyPatch(BaseModel):
@@ -98,6 +99,7 @@ class ProxyView(BaseModel):
     latency_ms: int | None
     tested_at: datetime | None
     tested_by: str | None
+    bound_device: str | None = None
     speed_testing: bool
     """已排队等设备测速。"""
     speed_mbps: float | None
@@ -133,6 +135,7 @@ class ProxyView(BaseModel):
             latency_ms=proxy.latency_ms,
             tested_at=proxy.tested_at,
             tested_by=proxy.tested_by,
+            bound_device=proxy.bound_device,
             speed_testing=proxy.speed_at is not None,
             speed_mbps=proxy.speed_mbps,
             parallel_mbps=proxy.parallel_mbps,
@@ -264,6 +267,10 @@ class RuleIn(BaseModel):
         return self
 
 
+class DeviceRuleIn(RuleIn):
+    line_limit: int | None = Field(None, ge=1, le=40)
+
+
 class ClusterRuleIn(RuleIn):
     mode: PickMode = PickMode.PRIORITY
     line_limit: int = Field(2, ge=1, le=40)
@@ -282,6 +289,7 @@ class RuleView(BaseModel):
     local_port: int | None
     mode: PickMode
     line_limit: int
+    device_line_limit: int | None = None
     targets: list[RuleTargetView] | None
     updated_at: datetime
 
@@ -292,7 +300,8 @@ class RuleView(BaseModel):
             folder_id=rule.folder_id,
             local_port=rule.local_port,
             mode=rule.mode,
-            line_limit=rule.line_limit,
+            line_limit=rule.device_line_limit or rule.line_limit,
+            device_line_limit=rule.device_line_limit,
             targets=(
                 [
                     RuleTargetView(**target, label=labels.get((target["kind"], target["id"])))

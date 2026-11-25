@@ -43,6 +43,7 @@ from scheduler_center.modules.proxy.repository import (
 from scheduler_center.modules.proxy.schemas import (
     ClusterRuleIn,
     DeviceRow,
+    DeviceRuleIn,
     LineView,
     RuleIn,
     RuleView,
@@ -124,7 +125,7 @@ async def set_cluster_rule(use: Use, body: ClusterRuleIn, database: DatabaseDep)
 
 @router.put("/proxy-uses/{use}/devices/{instance_id}")
 async def set_device_rule(
-    use: Use, instance_id: str, body: RuleIn, database: DatabaseDep
+    use: Use, instance_id: str, body: DeviceRuleIn, database: DatabaseDep
 ) -> RuleView:
     """给一台设备在这个用途上设例外，可以用这台设备的本机端口。"""
     if instance_id == CLUSTER:
@@ -134,6 +135,8 @@ async def set_device_rule(
         rule = await rules.get(ProxyRule, (use, instance_id), lock=True)
         rule = rule or ProxyRule(use, instance_id)
         labels = await _apply(session, rule, body)
+        if "line_limit" in body.model_fields_set:
+            rule.device_line_limit = body.line_limit
         await rules.save(rule)
         await Live(session).proxies_changed()
     return RuleView.of(rule, labels)
