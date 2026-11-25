@@ -205,6 +205,7 @@ export function Pool({
   onSelectionChange: OnChangeFn<RowSelectionState>;
 }) {
   const { values, page, set } = useFilters(FILTERS);
+  const enabled = values.enabled === ALL ? undefined : values.enabled !== "false";
   const selected = Object.keys(selection);
   const clear = () => onSelectionChange({});
   const uses = useUses().data ?? [];
@@ -222,7 +223,7 @@ export function Pool({
           line: values.line,
           protocol: values.protocol as Schemas["ProxyProtocol"] | undefined,
           status: values.status as Schemas["ProxyStatus"] | undefined,
-          enabled: flag(values.enabled),
+          enabled,
           ip_version: values.ip_version ? Number(values.ip_version) : undefined,
           dynamic: flag(values.dynamic),
           page,
@@ -248,7 +249,9 @@ export function Pool({
     values.folder === UNFILED
       ? "未分组"
       : (folders.find((folder) => folder.id === values.folder)?.name ?? "全部代理");
-  const filtered = FILTERS.some((key) => key !== "folder" && values[key]);
+  const filtered =
+    enabled === false ||
+    FILTERS.some((key) => key !== "folder" && key !== "enabled" && values[key]);
   return (
     <Panel className="rise min-w-0">
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
@@ -285,13 +288,13 @@ export function Pool({
           onChange={(protocol) => set({ protocol })}
         />
         <FilterSelect
-          value={values.enabled}
-          all="启用和停用"
+          value={enabled?.toString()}
+          all="全部（启用和停用）"
           options={[
             ["true", "已启用"],
             ["false", "已停用"],
           ]}
-          onChange={(enabled) => set({ enabled })}
+          onChange={(value) => set({ enabled: value ?? ALL })}
         />
         <FilterSelect
           value={values.ip_version}
@@ -361,9 +364,11 @@ export function Pool({
         empty={
           filtered
             ? "没有符合条件的代理"
-            : values.folder
-              ? "这里还没有代理：把代理拖进来，或导入时选这个文件夹"
-              : "代理池是空的，点右上角“导入”或“添加代理”"
+            : enabled
+              ? "没有已启用的代理"
+              : values.folder
+                ? "这里还没有代理：把代理拖进来，或导入时选这个文件夹"
+                : "代理池是空的，点右上角“导入”或“添加代理”"
         }
       >
         {(data) => (

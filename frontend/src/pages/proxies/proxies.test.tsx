@@ -1,15 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchClient } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UseBoard } from "./board";
 import { address, depths, type Folder, subtree, type Tag, type UseCard } from "./data";
+import { Pool } from "./pool";
 import { UsePicker } from "./shared";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const uses = [
   { key: "crawler.crawl_creator", service: "crawler", service_name: "爬取程序", name: "获取信息" },
@@ -100,6 +105,36 @@ it.each([0, 1])("旧端口只有在任务进行中时才显示（使用中 %i）
   expect(screen.queryAllByRole("button", { name: /线路 本机端口 11479/ })).toHaveLength(inUse);
   expect(screen.getByText(/^线路$/)).toHaveTextContent(`线路 ${2 + inUse}`);
   expect(screen.getByTitle("最近一小时：正常 / 异常")).toHaveTextContent("3 / 0");
+});
+
+it.each([
+  ["/proxies", "已启用", true],
+  ["/proxies?enabled=false", "已停用", false],
+  ["/proxies?enabled=all", "全部（启用和停用）", undefined],
+])("代理池按 %s 的启用状态请求列表", async (url, label, enabled) => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["get", "/api/proxy-uses", {}], []);
+  client.setQueryData(["get", "/api/proxy-folders"], { folders: [], unfiled: 0 });
+  const get = vi.spyOn(fetchClient, "GET").mockResolvedValue({
+    data: { items: [], total: 0 },
+    response: new Response(),
+  });
+
+  render(
+    <MemoryRouter initialEntries={[url]}>
+      <QueryClientProvider client={client}>
+        <Pool selection={{}} onSelectionChange={vi.fn()} />
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+
+  expect(screen.getByRole("combobox", { name: "全部（启用和停用）" })).toHaveTextContent(label);
+  await waitFor(() =>
+    expect(get).toHaveBeenCalledWith(
+      "/api/proxies",
+      expect.objectContaining({ params: { query: expect.objectContaining({ enabled }) } }),
+    ),
+  );
 });
 
 function Picker() {

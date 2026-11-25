@@ -306,7 +306,11 @@ async def test_heartbeat_expiry_takeover_and_late_upload(
     creator_detail = (await client.get(f"/api/creators/{creator.id}")).raise_for_status().json()
     assert creator_detail["crawl"]["result_executor_id"] == "device-a"
     assert len(creator_detail["crawl_attempts"]) == 1
+
+    assert (await service.delete("/api/crawler-services/device-a")).status_code == 204
     listed = (await client.get("/api/executors")).raise_for_status().json()
+    withdrawn = next(item for item in listed if item["instance_id"] == "device-a")
+    assert withdrawn["withdrawn_at"] is not None
     activity = {item["instance_id"]: item["activity"] for item in listed}
     assert activity["device-a"] == {
         "active": 0,

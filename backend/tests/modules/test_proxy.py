@@ -770,6 +770,22 @@ async def test_old_leases_do_not_override_a_proxy_credential_update(
     assert line_of(await lease(service)) == "203.0.113.1"
 
 
+async def test_proxy_list_filters_enabled_and_disabled_records(client):
+    ids = await add(client, "10.0.0.1:80\n10.0.0.2:80")
+    disabled = await client.post("/api/proxies/disable", json={"ids": [ids["10.0.0.2"]]})
+    assert disabled.raise_for_status().json() == {"count": 1}
+
+    for params, expected in (
+        ({"enabled": "true"}, {ids["10.0.0.1"]}),
+        ({"enabled": "false"}, {ids["10.0.0.2"]}),
+        ({}, set(ids.values())),
+    ):
+        response = await client.get("/api/proxies", params=params)
+        payload = response.raise_for_status().json()
+        assert payload["total"] == len(expected)
+        assert {item["id"] for item in payload["items"]} == expected
+
+
 async def test_a_pending_lease_does_not_take_a_proxy_disabled_during_selection(
     client, service, database, monkeypatch
 ):

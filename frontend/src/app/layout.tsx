@@ -101,19 +101,22 @@ function ExecutorHealth() {
       className="border-sidebar-border mx-3 mb-3 space-y-2 rounded-md border px-3 py-2.5 text-xs transition-colors hover:bg-white/5"
     >
       {(["crawler", "analysis"] as const).map((kind) => {
-        const items = data?.filter((item) => item.kind === kind) ?? [];
-        const online = items.filter((item) => item.online).length;
+        const active =
+          data?.filter((item) => item.kind === kind && item.withdrawn_at === null) ?? [];
+        const online = active.filter((item) => item.online).length;
+        const dot = !active.length
+          ? "bg-sidebar-muted"
+          : online === active.length
+            ? "bg-status-done"
+            : online > 0
+              ? "bg-status-attention"
+              : "bg-status-failed";
         return (
           <div key={kind} className="flex items-center gap-2">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                !data ? "bg-sidebar-muted" : online ? "bg-status-done" : "bg-status-failed",
-              )}
-            />
+            <span aria-hidden="true" className={cn("size-1.5 rounded-full", dot)} />
             {executorKinds[kind]}
             <span className="text-sidebar-muted ml-auto font-mono">
-              {data ? `${online}/${items.length} 在线` : "—"}
+              {data ? `${online}/${active.length} 在线` : "—"}
             </span>
           </div>
         );

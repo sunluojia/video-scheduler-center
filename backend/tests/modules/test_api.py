@@ -255,7 +255,7 @@ async def test_service_endpoints_require_the_token(client):
     assert (await client.get(f"/api/materials/{UUID(int=1)}")).status_code == 401
 
 
-async def test_executors_register_and_go_offline(client, service, database):
+async def test_executor_list_distinguishes_withdrawal_from_timeout(client, service, database):
     body = {"url": CRAWLER_URL, "version": "2.0"}
     reply = await service.put("/api/crawler-services/c1", json=body)
     # 不报身份池的程序不分账号池，并发按默认
@@ -266,15 +266,33 @@ async def test_executors_register_and_go_offline(client, service, database):
         "warm_slots": 1,
         "revoked_attempts": [],
     }
-    await register(database, ExecutorKind.ANALYSIS, ANALYSIS_URL, utcnow() - timedelta(minutes=5))
+    stale = utcnow() - timedelta(minutes=5)
+    await register(database, ExecutorKind.ANALYSIS, ANALYSIS_URL, stale)
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL, stale, instance_id="timed-out")
+    await register(database, ExecutorKind.CRAWLER, CRAWLER_URL, instance_id="working")
 
-    listed = {item["kind"]: item for item in (await client.get("/api/executors")).json()}
-    assert (listed["crawler"]["online"], listed["crawler"]["version"]) == (True, "2.0")
-    assert listed["analysis"]["online"] is False
+    response = await client.get("/api/executors")
+    before = {item["instance_id"]: item for item in response.raise_for_status().json()}
+    assert before["c1"]["online"] is True and before["c1"]["version"] == "2.0"
+    assert before["analysis-1"]["online"] is False
 
     assert (await service.delete("/api/crawler-services/c1")).status_code == 204
-    [crawler] = [i for i in (await client.get("/api/executors")).json() if i["kind"] == "crawler"]
-    assert crawler["online"] is False
+    response = await client.get("/api/executors")
+    crawlers = {
+        item["instance_id"]: item
+        for item in response.raise_for_status().json()
+        if item["kind"] == "crawler"
+    }
+    active = {
+        name: item["online"] for name, item in crawlers.items() if item["withdrawn_at"] is None
+    }
+    assert active == {"timed-out": False, "working": True}
+    assert crawlers["timed-out"]["last_seen_at"] is not None
+
+    withdrawn = crawlers["c1"]
+    assert withdrawn["online"] is False and withdrawn["withdrawn_at"] is not None
+    assert withdrawn["registered_at"] == before["c1"]["registered_at"]
+    assert withdrawn["last_seen_at"] == before["c1"]["last_seen_at"]
 
 
 async def test_crawler_slots_set_on_the_page_go_out_with_the_heartbeat(client, service):

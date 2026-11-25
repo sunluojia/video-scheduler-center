@@ -9,7 +9,7 @@ import { CrawlProgress } from "@/components/crawl-progress";
 import { DataTable } from "@/components/data-table";
 import { DownloadProgress } from "@/components/download-progress";
 import { Field } from "@/components/field";
-import { Facts, Metric, PageHeader, Panel, QueryState, Section } from "@/components/page";
+import { Facts, Metric, Notice, PageHeader, Panel, QueryState, Section } from "@/components/page";
 import { Status } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,11 +36,14 @@ import { executorKinds, jobStatus, stageNames } from "@/lib/status";
 
 type Executor = Schemas["ExecutorView"];
 
-const columns: ColumnDef<Executor, unknown>[] = [
+const executorRowId = (item: Executor) => `${item.kind}/${item.instance_id}`;
+
+const registrationColumns: ColumnDef<Executor, unknown>[] = [
   {
     header: "状态",
     size: 80,
     cell: ({ row: { original: executor } }) => {
+      if (executor.withdrawn_at !== null) return <Status label="已注销" tone="muted" />;
       if (executor.online) return <Status label="在线" tone="done" />;
       if (!executor.last_seen_at) return <Status label="待心跳" tone="attention" />;
       return <Status label="离线" tone="failed" />;
@@ -70,12 +73,31 @@ const columns: ColumnDef<Executor, unknown>[] = [
     size: 160,
     cell: ({ row }) => (
       <span className="text-muted-foreground font-mono text-xs">
-        {row.original.withdrawn_at
-          ? `已注销 ${dateTime(row.original.withdrawn_at)}`
-          : dateTime(row.original.registered_at)}
+        {dateTime(row.original.registered_at)}
       </span>
     ),
   },
+];
+
+const recentActivity: ColumnDef<Executor, unknown> = {
+  header: "过去 24 小时",
+  size: 170,
+  cell: ({ row: { original } }) => (
+    <span className="text-xs">
+      完成 {original.activity?.completed_24h ?? 0}
+      {original.kind === "crawler" && (
+        <>
+          {" "}
+          · 过期 {original.activity?.expired_24h ?? 0} · 接手{" "}
+          {original.activity?.takeovers_24h ?? 0}
+        </>
+      )}
+    </span>
+  ),
+};
+
+const activeColumns: ColumnDef<Executor, unknown>[] = [
+  ...registrationColumns,
   {
     header: "当前任务",
     size: 105,
@@ -85,22 +107,7 @@ const columns: ColumnDef<Executor, unknown>[] = [
       </span>
     ),
   },
-  {
-    header: "过去 24 小时",
-    size: 170,
-    cell: ({ row: { original } }) => (
-      <span className="text-xs">
-        完成 {original.activity?.completed_24h ?? 0}
-        {original.kind === "crawler" && (
-          <>
-            {" "}
-            · 过期 {original.activity?.expired_24h ?? 0} · 接手{" "}
-            {original.activity?.takeovers_24h ?? 0}
-          </>
-        )}
-      </span>
-    ),
-  },
+  recentActivity,
   {
     header: "任务并发",
     size: 215,
@@ -122,6 +129,23 @@ const columns: ColumnDef<Executor, unknown>[] = [
   },
 ];
 
+const historyColumns: ColumnDef<Executor, unknown>[] = [
+  ...registrationColumns,
+  {
+    header: "注销时间",
+    size: 160,
+    cell: ({ row: { original } }) => (
+      <time
+        className="text-muted-foreground font-mono text-xs"
+        dateTime={original.withdrawn_at ?? undefined}
+      >
+        {dateTime(original.withdrawn_at)}
+      </time>
+    ),
+  },
+  recentActivity,
+];
+
 export function ExecutorsPage() {
   const executors = $api.useQuery("get", "/api/executors", {}, { refetchInterval: 15_000 });
   return (
@@ -136,13 +160,7 @@ export function ExecutorsPage() {
       <Section title="实例" extra={<AddExecutor />}>
         <Panel>
           <QueryState query={executors} isEmpty={(data) => !data.length} empty="还没有执行程序">
-            {(data) => (
-              <DataTable
-                columns={columns}
-                data={data}
-                getRowId={(item) => `${item.kind}/${item.instance_id}`}
-              />
-            )}
+            {(data) => <ExecutorInventory executors={data} />}
           </QueryState>
         </Panel>
       </Section>
@@ -150,6 +168,28 @@ export function ExecutorsPage() {
         <AnalysisStatus />
         <CrawlerStatus />
       </div>
+    </>
+  );
+}
+
+function ExecutorInventory({ executors }: { executors: Executor[] }) {
+  const active = executors.filter((item) => item.withdrawn_at === null);
+  const history = executors.filter((item) => item.withdrawn_at !== null);
+  return (
+    <>
+      {active.length ? (
+        <DataTable columns={activeColumns} data={active} getRowId={executorRowId} />
+      ) : (
+        <Notice>暂无在册执行程序</Notice>
+      )}
+      {history.length > 0 && (
+        <details className="border-t">
+          <summary className="text-muted-foreground cursor-pointer px-4 py-3 text-sm">
+            历史设备（{history.length}）
+          </summary>
+          <DataTable columns={historyColumns} data={history} getRowId={executorRowId} />
+        </details>
+      )}
     </>
   );
 }
