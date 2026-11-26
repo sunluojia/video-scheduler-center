@@ -5,6 +5,8 @@ import { createBrowserRouter, redirect, RouterProvider } from "react-router";
 import { toast } from "sonner";
 import { errorText } from "@/api/client";
 import { Layout } from "@/app/layout";
+import { RouteErrorBoundary } from "@/app/route-error-boundary";
+import { createRouteRecovery } from "@/app/route-recovery";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "@/index.css";
@@ -16,9 +18,11 @@ const queryClient = new QueryClient({
 });
 
 // 页面按路由拆包，打开时再加载
+const routeRecovery = createRouteRecovery();
 const router = createBrowserRouter([
   {
     element: <Layout />,
+    errorElement: <RouteErrorBoundary recovery={routeRecovery} />,
     // 首次打开时页面代码还在加载，先铺上工作区底色，避免白屏闪烁
     hydrateFallbackElement: <div className="workspace min-h-screen" />,
     children: [
@@ -74,6 +78,8 @@ const router = createBrowserRouter([
     ],
   },
 ]);
+const disconnectRouteRecovery = routeRecovery.connect(router);
+import.meta.hot?.dispose(disconnectRouteRecovery);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

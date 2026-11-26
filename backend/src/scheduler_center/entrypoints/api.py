@@ -59,12 +59,16 @@ class SinglePageApp(StaticFiles):
 
     async def get_response(self, path: str, scope):
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except HTTPException as error:
             # path 是按系统格式处理过的（Windows 上是反斜杠），接口前缀看请求原始路径
             if error.status_code != 404 or scope["path"].startswith("/api/"):
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+        if response.headers.get("content-type", "").startswith("text/html"):
+            # 新版本发布后，浏览器刷新时需要重新验证入口 HTML。
+            response.headers["cache-control"] = "no-cache"
+        return response
 
 
 def create_app(

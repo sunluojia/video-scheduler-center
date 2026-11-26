@@ -372,7 +372,10 @@ async def test_pages_get_the_frontend_and_unknown_api_paths_get_404(database_url
     app = create_app(api_settings(database_url=database_url, static_root=tmp_path))
     transport = httpx.ASGITransport(app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        assert "调度中心" in (await client.get("/batches/1")).text
+        for path in ("/", "/batches/1"):
+            page = await client.get(path)
+            assert "调度中心" in page.text
+            assert page.headers["cache-control"] == "no-cache"
         assert (await client.get("/api/no-such-thing")).status_code == 404
     await app.state.gateway.aclose()
     await app.state.database.dispose()
