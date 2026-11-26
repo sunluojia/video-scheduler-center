@@ -26,6 +26,7 @@ from scheduler_center.modules.batch.models import (
     Work,
     WorkStatus,
 )
+from scheduler_center.modules.batch.service import LOGIN_REQUIRED_NOTE, restricted_video_outcome
 
 SUCCESS, FAILED, RETRY = "成功达人", "失败达人", "待重跑达人"
 TOPIC_MARKS = ("#", "＃")
@@ -79,14 +80,25 @@ class CreatorResult:
     qr: bytes | None
     crawl_finished_at: datetime | None = None
 
+    def settlement(self) -> tuple[CreatorStatus, str | None]:
+        creator = self.creator
+        if creator.note == LOGIN_REQUIRED_NOTE:
+            return CreatorStatus.RECRAWL, creator.note
+        if creator.status not in (CreatorStatus.FAILED, CreatorStatus.INVALID) and (
+            outcome := restricted_video_outcome(self.works)
+        ):
+            return outcome
+        return creator.status, creator.note
+
 
 def sheet_of(result: CreatorResult) -> str:
-    """私密账号、需要登录、找不到此达人的进失败达人；有结论或至少一条视频成功的进成功达人；
-    其余（网络等原因爬取失败、视频全部失败、还没处理完）进待重跑达人。"""
-    creator = result.creator
-    if creator.status == CreatorStatus.FAILED:
+    """按达人和作品结论分表。需要登录的达人归待重跑。"""
+    status, note = result.settlement()
+    if note == LOGIN_REQUIRED_NOTE:
+        return RETRY
+    if status == CreatorStatus.FAILED:
         return FAILED
-    if creator.status == CreatorStatus.COMPLETED or any(
+    if status == CreatorStatus.COMPLETED or any(
         work.status == WorkStatus.COMPLETED for work in result.works
     ):
         return SUCCESS
@@ -125,7 +137,8 @@ def build_workbook(results: Sequence[CreatorResult]) -> bytes:
         elif sheet is failed:
             details = [creator.note]
         else:
-            details = [creator.note or PENDING_REASONS.get(creator.status)]
+            status, note = result.settlement()
+            details = [note or PENDING_REASONS.get(status)]
         sheet.append([creator.oecuid, creator.name, None, *details, time])
         last_rows[sheet.title] += 1
         if result.qr:
@@ -166,15 +179,17 @@ def _success_cells(result: CreatorResult) -> list[str | CellRichText | None]:
     succeeded = [work for work in works if work.status == WorkStatus.COMPLETED]
     text_tags = creator.labels + [tag for work in succeeded for tag in work.tags or []]
     typed_tags: list[str] = []
-    if creator.status == CreatorStatus.COMPLETED:
-        typed_tags = _summary_tags(creator.labels + (creator.tags or []))
+    status, note = result.settlement()
+    if status == CreatorStatus.COMPLETED:
+        summary_tags = creator.tags if creator.status == CreatorStatus.COMPLETED else None
+        typed_tags = _summary_tags(creator.labels + (summary_tags or []))
         display_tags = typed_tags.copy()
         inactivity_tag = creator.work_inactivity_tag(works, result.crawl_finished_at)
         if inactivity_tag and inactivity_tag not in display_tags:
             display_tags.append(inactivity_tag)
         typed_text = "、".join(display_tags) or None
     else:
-        typed_text = creator.note or "汇总未完成"
+        typed_text = note or "汇总未完成"
     ids = "\n".join(work.platform_id for work in succeeded)
     return [*cells, _text_tag_cell(text_tags, typed_tags), typed_text, ids or None]
 

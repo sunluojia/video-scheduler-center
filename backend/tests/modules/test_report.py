@@ -191,13 +191,45 @@ def test_export_puts_each_creator_in_one_sheet_in_roster_order():
     assert rows[1][14] == "汇总未完成"
     assert [row[1:4:2] for row in failed.iter_rows(min_row=2, values_only=True)] == [
         ("private", "私密账号"),
+    ]
+    assert retry["D1"].value == "待重跑原因"
+    assert [row[1:4:2] for row in retry.iter_rows(min_row=2, values_only=True)] == [
+        ("broken", "爬取失败：作品列表等待响应超时"),
         ("locked", "需要登录"),
     ]
-    assert failed["C3"].value == "二维码无法读取"
-    assert retry["D1"].value == "待重跑原因"
-    assert retry["D2"].value == "爬取失败：作品列表等待响应超时"
+    assert retry["C3"].value == "二维码无法读取"
     assert (len(success._images), len(retry._images)) == (1, 1)
     assert success["A3"].number_format == "@"
+
+
+def test_export_classifies_saved_restricted_results_by_their_works():
+    reason = "下载失败：受限视频（服务端未返回播放地址）"
+    with_photo = creator(1, "photos", CreatorStatus.RECRAWL, labels=["图文作者"])
+    only_video = creator(2, "video", CreatorStatus.RECRAWL, note="视频全部失败，需要重新抓取")
+    book = load_workbook(
+        io.BytesIO(
+            build_workbook(
+                [
+                    CreatorResult(
+                        with_photo,
+                        [
+                            work(with_photo, 1, WorkStatus.SKIPPED, kind=WorkKind.PHOTO),
+                            work(with_photo, 2, WorkStatus.FAILED, error=reason),
+                        ],
+                        None,
+                    ),
+                    CreatorResult(
+                        only_video, [work(only_video, 1, WorkStatus.FAILED, error=reason)], None
+                    ),
+                ]
+            )
+        )
+    )
+    assert book["成功达人"]["B3"].value == "photos"
+    assert book["成功达人"]["G3"].value == reason
+    assert book["成功达人"]["O3"].value == "图文作者"
+    assert book["待重跑达人"]["B2"].value == "video"
+    assert "服务端未返回播放地址" in book["待重跑达人"]["D2"].value
 
 
 def test_export_sorts_topics_and_colors_only_tags_missing_from_type_summary():

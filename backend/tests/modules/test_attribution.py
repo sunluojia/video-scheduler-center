@@ -24,6 +24,7 @@ from scheduler_center.modules.crawl.models import (
     CrawlerTask,
     CrawlerTaskAttempt,
     CrawlerTaskRun,
+    CrawlerTaskStatus,
 )
 from scheduler_center.modules.crawl.tables import crawler_task_attempts
 from scheduler_center.modules.flow.history import events
@@ -381,6 +382,57 @@ async def test_heartbeat_only_renews_attempts_reported_by_the_session(database, 
         assert await CrawlerAttempts(session).expire(utcnow()) == 1
     [takeover] = await claim(service, b, crawl=2)
     assert takeover["task_id"] == lost_response["task_id"] and takeover["attempt_no"] == 2
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "视频已删除或不存在",
+        "视频需登录查看",
+        "视频需关注或为私密视频",
+        "挂车/受限视频（服务端未返回播放地址）",
+        "受限视频（服务端未返回播放地址）",
+    ],
+)
+async def test_unavailable_download_finishes_on_the_first_attempt(
+    database, client, service, reason
+):
+    identity = owner("device-a")
+    batch, creator, _ = await new_download(database, service, identity)
+    [first] = await claim(service, identity, download=1)
+    assert (first["attempt_no"], first["run"]) == (1, 1)
+    response = await service.post(
+        "/api/proxy-leases",
+        json={
+            "device": identity["executor_id"],
+            "use": Use.CRAWL,
+            "task_id": first["task_id"],
+            "attempt_id": first["attempt_id"],
+        },
+    )
+    lease = response.raise_for_status().json()["lease"]
+    released = await service.post(
+        f"/api/proxy-leases/{lease['lease_id']}/release", json={"outcome": "normal"}
+    )
+    assert released.status_code == 204
+
+    await crawler_result(database, first, identity, "download_failed", reason=reason)
+    await crawler_result(database, first, identity, "download_failed", reason="后到的事件")
+
+    task = await load(database, CrawlerTask, UUID(first["task_id"]))
+    run = await load(database, CrawlerTaskRun, (task.id, first["run"]))
+    attempt = await load(database, CrawlerTaskAttempt, UUID(first["attempt_id"]))
+    [work] = await works(database, creator)
+    assert (task.status, task.error) == (CrawlerTaskStatus.FAILED, reason)
+    assert (run.status, run.current_attempt_id) == (CrawlerRunStatus.FAILED, None)
+    assert attempt.status == CrawlerAttemptStatus.FAILED
+    assert (work.status, work.error) == (WorkStatus.FAILED, f"下载失败：{reason}")
+    assert await claim(service, identity, download=1) == []
+    stats = (
+        await client.get("/api/stats/crawl-ips", params={"batch_id": str(batch.id)})
+    ).raise_for_status().json()
+    assert stats["data_status"] == "no_leases"
+    assert stats["summary"]["risk_count"] == 0
 
 
 async def test_redownload_cancels_previous_attempt_and_tracks_proxy_lease(

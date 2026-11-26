@@ -1,7 +1,14 @@
 """业务推进：从开始批次到达人得出结论的各条路径。"""
 
 import asyncio
+from io import BytesIO
+from pathlib import Path
 from uuid import UUID
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from openpyxl import load_workbook
 
 from scheduler_center.modules.analysis.messages import JobState
 from scheduler_center.modules.analysis.models import AnalysisJob, JobStatus
@@ -104,7 +111,7 @@ async def test_creator_goes_from_crawl_to_summary(database, service):
     assert (await load(database, Batch, batch.id)).status == BatchStatus.COMPLETED
 
 
-async def test_crawl_conclusions(database):
+async def test_crawl_conclusions(database, client):
     batch = await new_batch(database, "private", "missing", "broken", "empty", "photos", "locked")
     private, missing, broken, empty, photos, locked = await creators(database, batch)
 
@@ -134,9 +141,58 @@ async def test_crawl_conclusions(database):
         (CreatorStatus.RECRAWL, "爬取失败：登录失效", []),
         (CreatorStatus.COMPLETED, None, ["无作品"]),
         (CreatorStatus.COMPLETED, None, ["图文作者"]),
-        (CreatorStatus.FAILED, "需要登录", []),
+        (CreatorStatus.RECRAWL, "需要登录", []),
     ]
     assert await messages(database, "download_video") == []
+
+    path = f"/api/batches/{batch.id}"
+    detail = (await client.get(path)).raise_for_status().json()
+    assert detail["creators"] == detail["creator_progress"] == {
+        "failed": 2,
+        "recrawl": 2,
+        "completed": 2,
+    }
+    results = (await client.get(f"{path}/creators", params={"progress": "recrawl"})).json()
+    assert [(item["handle"], item["note"]) for item in results["items"]] == [
+        ("broken", "爬取失败：登录失效"),
+        ("locked", "需要登录"),
+    ]
+
+    response = (await client.get(f"{path}/export")).raise_for_status()
+    book = load_workbook(BytesIO(response.content))
+    assert book["失败达人"]["D2"].value == "私密账号"
+    assert book["待重跑达人"]["D3"].value == "需要登录"
+
+
+async def test_migration_keeps_existing_login_required_creators_in_recrawl(database, database_url):
+    batch = await new_batch(database, "locked", "private")
+    locked, private = await creators(database, batch)
+    await crawler_says(
+        database, await crawl_task(database, locked), "crawled", conclusion="login_required"
+    )
+    await crawler_says(
+        database, await crawl_task(database, private), "crawled", conclusion="private"
+    )
+    original = await load(database, Creator, locked.id)
+    config = Config(str(Path(__file__).parents[2] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    await database.dispose()
+    await asyncio.to_thread(command.downgrade, config, "0018")
+    try:
+        previous = await load(database, Creator, locked.id)
+        assert (previous.status, previous.note) == (CreatorStatus.FAILED, "需要登录")
+    finally:
+        await database.dispose()
+        await asyncio.to_thread(command.upgrade, config, "head")
+
+    migrated = await load(database, Creator, locked.id)
+    assert (migrated.status, migrated.note, migrated.updated_at) == (
+        CreatorStatus.RECRAWL,
+        "需要登录",
+        original.updated_at,
+    )
+    unchanged = await load(database, Creator, private.id)
+    assert (unchanged.status, unchanged.note) == (CreatorStatus.FAILED, "私密账号")
 
 
 async def test_duplicate_and_stale_events_change_nothing(database):
@@ -221,6 +277,119 @@ async def test_all_videos_failing_needs_recrawl_without_summary(database, servic
     creator = await load(database, Creator, job.creator_id)
     assert (creator.status, creator.note) == (CreatorStatus.RECRAWL, "视频全部失败，需要重新抓取")
     assert await messages(database, "summarize_creator") == []
+
+
+@pytest.mark.parametrize(
+    ("items", "expected_status", "expected_note"),
+    [
+        (
+            ("shop", "restricted"),
+            CreatorStatus.RECRAWL,
+            "最新视频均为挂车或受限视频（服务端未返回播放地址），需要重新抓取",
+        ),
+        (("photo", "shop"), CreatorStatus.COMPLETED, None),
+        (("photo", "shop", "network"), CreatorStatus.COMPLETED, None),
+        (("recognized", "restricted"), CreatorStatus.COMPLETED, None),
+        (
+            ("shop", "network"),
+            CreatorStatus.RECRAWL,
+            "视频全部失败（含挂车或受限视频），需要重新抓取",
+        ),
+        (
+            ("restricted", "ai_failure"),
+            CreatorStatus.RECRAWL,
+            "视频全部失败（含挂车或受限视频），需要重新抓取",
+        ),
+        (
+            ("photo", "network"),
+            CreatorStatus.RECRAWL,
+            "视频全部失败，需要重新抓取",
+        ),
+    ],
+    ids=[
+        "all-restricted",
+        "photo-and-restricted",
+        "photo-restricted-and-network",
+        "recognized-and-restricted",
+        "restricted-and-network",
+        "restricted-and-ai-failure",
+        "photo-and-network-only",
+    ],
+)
+async def test_restricted_videos_settle_and_export(
+    database, client, service, items, expected_status, expected_note
+):
+    batch = await new_batch(database, "alice")
+    [alice] = await creators(database, batch)
+    roster = [
+        photo(position) if item == "photo" else video(position)
+        for position, item in enumerate(items, 1)
+    ]
+    await crawl(database, alice, *roster)
+    downloads = {
+        item["work"]["work_id"]: item for item in await messages(database, "download_video")
+    }
+    reasons = {
+        "shop": "挂车/受限视频（服务端未返回播放地址）",
+        "restricted": "受限视频（服务端未返回播放地址）",
+        "network": "第 3 次：作品页里没有媒体地址",
+    }
+    for item, entry in zip(items, roster, strict=True):
+        if item == "photo":
+            continue
+        task = downloads[entry["work_id"]]
+        if item in reasons:
+            await crawler_says(database, task["task_id"], "download_failed", reason=reasons[item])
+        else:
+            assert (await upload(service, task["task_id"])).status_code == 204
+            [analysis] = await messages(database, "analyze_video")
+            if item == "recognized":
+                await analysis_says(
+                    database,
+                    job_event(analysis["job_id"], "completed", result=recognized("美妆", "美妆")),
+                )
+            else:
+                await analysis_says(
+                    database, job_event(analysis["job_id"], "failed", error="识别超时")
+                )
+
+    summaries = await messages(database, "summarize_creator")
+    if "recognized" in items:
+        [summary] = summaries
+        assert len(summary["videos"]) == 1
+        await analysis_says(
+            database,
+            job_event(
+                summary["job_id"], "completed", kind="summary", result={"tags": ["美妆博主"]}
+            ),
+        )
+    else:
+        assert summaries == []
+
+    settled = await load(database, Creator, alice.id)
+    assert (settled.status, settled.note) == (expected_status, expected_note)
+    response = (await client.get(f"/api/batches/{batch.id}/export")).raise_for_status()
+    book = load_workbook(BytesIO(response.content))
+    success, failed, retry = book["成功达人"], book["失败达人"], book["待重跑达人"]
+    assert failed.max_row == 1
+    if expected_status == CreatorStatus.RECRAWL:
+        assert success.max_row == 2
+        assert retry["D2"].value == expected_note
+    else:
+        assert retry.max_row == 1
+        for work, item in zip(await works(database, alice), items, strict=True):
+            if item in {"shop", "restricted"}:
+                assert work.status == WorkStatus.FAILED
+                assert work.error == f"下载失败：{reasons[item]}"
+                assert success.cell(3, 3 + 2 * work.position).value == work.error
+        if "photo" in items:
+            assert settled.tags == []
+            assert success["E3"].value == success["N3"].value == success["O3"].value == "图文作者"
+            assert success["P3"].value is None
+        else:
+            assert success["E3"].value == success["N3"].value == "美妆"
+            assert success["O3"].value == "美妆博主"
+            assert success["P3"].value == roster[0]["work_id"]
 
 
 async def test_retry_reopens_the_job_and_creator(database, service):

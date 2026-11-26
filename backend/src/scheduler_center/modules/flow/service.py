@@ -52,6 +52,7 @@ from scheduler_center.modules.batch.repository import (
     CreatorRepository,
     WorkRepository,
 )
+from scheduler_center.modules.batch.service import LOGIN_REQUIRED_NOTE, restricted_video_outcome
 from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.crawl.messages import (
     CRAWL_CREATOR,
@@ -98,7 +99,7 @@ WORK_STATUS = {
 
 UNREACHABLE = {
     CrawlConclusion.PRIVATE: "私密账号",
-    CrawlConclusion.LOGIN_REQUIRED: "需要登录",
+    CrawlConclusion.LOGIN_REQUIRED: LOGIN_REQUIRED_NOTE,
     CrawlConclusion.NOT_FOUND: "找不到此达人",
 }
 REDO = (WorkStatus.COMPLETED, WorkStatus.FAILED, WorkStatus.NEEDS_REVIEW, WorkStatus.ABANDONED)
@@ -249,7 +250,12 @@ class Flow:
         if failed:
             creator.settle(CreatorStatus.RECRAWL, now, f"爬取失败：{event.reason or '未说明原因'}")
         elif event.conclusion in UNREACHABLE:
-            creator.settle(CreatorStatus.FAILED, now, UNREACHABLE[event.conclusion])
+            status = (
+                CreatorStatus.RECRAWL
+                if event.conclusion == CrawlConclusion.LOGIN_REQUIRED
+                else CreatorStatus.FAILED
+            )
+            creator.settle(status, now, UNREACHABLE[event.conclusion])
         else:
             works = [
                 Work(
@@ -666,11 +672,9 @@ class Flow:
         work.settle(WorkStatus.ANALYZING, now)
 
     async def _settle(self, creator: Creator, now: datetime, *, resummarize: bool = False):
-        """按视频的结果推进达人：都有结果后汇总；全部失败需要重新抓取。
-
-        汇总用到的视频结果有变化时（补跑、重新分析），重新汇总。
-        """
-        videos = [w for w in await self._works.of_creator(creator.id) if w.kind == WorkKind.VIDEO]
+        """视频均有结果后推进达人。汇总用到的视频结果变化时，重新汇总。"""
+        works = await self._works.of_creator(creator.id)
+        videos = [work for work in works if work.kind == WorkKind.VIDEO]
         if not videos:
             return
         if any(work.status not in WORK_FINAL for work in videos):
@@ -679,7 +683,14 @@ class Flow:
             return
         completed = [work for work in videos if work.status == WorkStatus.COMPLETED]
         if not completed:
-            creator.settle(CreatorStatus.RECRAWL, now, "视频全部失败，需要重新抓取")
+            status, note = restricted_video_outcome(works) or (
+                CreatorStatus.RECRAWL,
+                "视频全部失败，需要重新抓取",
+            )
+            if status == CreatorStatus.COMPLETED:
+                creator.complete([], now)
+            else:
+                creator.settle(status, now, note)
             return
         jobs = await self._jobs.of_works([work.id for work in completed])
         sources = [

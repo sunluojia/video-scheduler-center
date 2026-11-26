@@ -80,7 +80,7 @@ class CreatorStatus(StrEnum):
     FAILED = "failed"
     """私密账号或找不到此达人。"""
     RECRAWL = "recrawl"
-    """爬取失败或视频全部失败，需要重新抓取。"""
+    """需要登录、爬取失败或视频全部失败，需要重新抓取。"""
     INVALID = "invalid"
     """名单中的达人名称无法识别为账号。"""
 

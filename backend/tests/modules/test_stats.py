@@ -101,7 +101,7 @@ async def test_each_stage_is_counted_with_its_failures(client, database, service
         ("crawl", "作品列表等待响应超时", 1),
         ("download", "链接失效", 1),
     ]
-    assert stats["creators"] == {"completed": 1, "failed": 2, "recrawl": 2}
+    assert stats["creators"] == {"completed": 1, "failed": 1, "recrawl": 3}
     assert stats["videos"] == {"completed": 1, "failed": 1}
     assert [row["stage"] for row in stats["durations"]][:2] == ["crawl", "download"]
     days = [row["at"][:10] for row in stats["timeline"]]
