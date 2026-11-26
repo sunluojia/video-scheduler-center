@@ -62,7 +62,7 @@ export function Trend({ stats }: { stats: Schemas["Stats"] }) {
     );
   return (
     <div className="space-y-3 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 [&>[role=group]]:flex-wrap">
         <Choice label="指标" options={TREND} value={metric} onChange={setMetric} />
         <Choice label="图表类型" options={KINDS} value={kind} onChange={setKind} />
       </div>
@@ -115,7 +115,7 @@ export function AiTrend({
   const total = metric === "cache" ? percent(cacheRate(usage)) : compact(sum(usage, "calls"));
   return (
     <div className="space-y-3 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 [&>[role=group]]:flex-wrap">
         <Choice label="AI 指标" options={AI} value={metric} onChange={setMetric} />
         <Choice label="图表类型" options={KINDS} value={kind} onChange={setKind} />
       </div>

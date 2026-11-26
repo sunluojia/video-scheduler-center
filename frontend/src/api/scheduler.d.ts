@@ -1002,6 +1002,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stats/crawl-ips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Crawl Ips
+         * @description 按批次统计仍在保留期内的采集租约，默认优先选择有租约的运行批次。
+         */
+        get: operations["get_crawl_ips_api_stats_crawl_ips_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stats/crawl-ip-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Crawl Ip Batches
+         * @description 采集 IP 看板的可选批次，包含租约明细已清理的历史批次。
+         */
+        get: operations["list_crawl_ip_batches_api_stats_crawl_ip_batches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stats/export": {
         parameters: {
             query?: never;
@@ -1488,6 +1528,118 @@ export interface components {
              * @default 5
              */
             max_works: number;
+        };
+        /** CrawlIpBatch */
+        CrawlIpBatch: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            status: components["schemas"]["BatchStatus"];
+            /** Has Leases */
+            has_leases: boolean;
+        };
+        /**
+         * CrawlIpRisk
+         * @description 一次租约最多归入一类风控。
+         */
+        CrawlIpRisk: {
+            /** Empty Body */
+            empty_body: number;
+            /** Challenge */
+            challenge: number;
+            /** Throttled */
+            throttled: number;
+            /** Blocked */
+            blocked: number;
+            /** Other */
+            other: number;
+        };
+        /** CrawlIpRow */
+        CrawlIpRow: {
+            /** Crawl Leases */
+            crawl_leases: number;
+            /** Collected Creators */
+            collected_creators: number;
+            /** Private */
+            private: number;
+            /** Not Found */
+            not_found: number;
+            /** Login Required */
+            login_required: number;
+            /** Risk Count */
+            risk_count: number;
+            /** Risk Rate Pct */
+            risk_rate_pct: number;
+            risk_breakdown: components["schemas"]["CrawlIpRisk"];
+            /** Active Hours */
+            active_hours: number;
+            /** Creators Per Hour */
+            creators_per_hour: number | null;
+            /** Leases Per Hour */
+            leases_per_hour: number | null;
+            /** Line */
+            line: string;
+            /** Proxy Name */
+            proxy_name: string;
+            /** Creator Share Pct */
+            creator_share_pct: number;
+            /** Risk Share Pct */
+            risk_share_pct: number;
+            /**
+             * Backoff State
+             * @enum {string}
+             */
+            backoff_state: "normal" | "cooling" | "probing";
+            /** Backoff Step */
+            backoff_step: number;
+            /** Backoff Until */
+            backoff_until: string | null;
+        };
+        /** CrawlIpStats */
+        CrawlIpStats: {
+            batch: components["schemas"]["CrawlIpBatch"] | null;
+            /**
+             * Data Status
+             * @enum {string}
+             */
+            data_status: "available" | "no_batch" | "no_leases" | "history_unavailable";
+            summary: components["schemas"]["CrawlIpSummary"];
+            /** Lines */
+            lines: components["schemas"]["CrawlIpRow"][];
+        };
+        /** CrawlIpSummary */
+        CrawlIpSummary: {
+            /** Crawl Leases */
+            crawl_leases: number;
+            /** Collected Creators */
+            collected_creators: number;
+            /** Private */
+            private: number;
+            /** Not Found */
+            not_found: number;
+            /** Login Required */
+            login_required: number;
+            /** Risk Count */
+            risk_count: number;
+            /** Risk Rate Pct */
+            risk_rate_pct: number;
+            risk_breakdown: components["schemas"]["CrawlIpRisk"];
+            /** Active Hours */
+            active_hours: number;
+            /** Creators Per Hour */
+            creators_per_hour: number | null;
+            /** Leases Per Hour */
+            leases_per_hour: number | null;
+            /** Active Ips */
+            active_ips: number;
+            /** First Lease At */
+            first_lease_at: string | null;
+            /** Last Lease At */
+            last_lease_at: string | null;
         };
         /** CrawlProgress */
         CrawlProgress: {
@@ -2332,6 +2484,13 @@ export interface components {
         Page_BatchRow_: {
             /** Items */
             items: components["schemas"]["BatchRow"][];
+            /** Total */
+            total: number;
+        };
+        /** Page[CrawlIpBatch] */
+        Page_CrawlIpBatch_: {
+            /** Items */
+            items: components["schemas"]["CrawlIpBatch"][];
             /** Total */
             total: number;
         };
@@ -4785,6 +4944,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Stats"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_crawl_ips_api_stats_crawl_ips_get: {
+        parameters: {
+            query?: {
+                batch_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CrawlIpStats"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_crawl_ip_batches_api_stats_crawl_ip_batches_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_CrawlIpBatch_"];
                 };
             };
             /** @description Validation Error */

@@ -9,14 +9,16 @@ from fastapi import APIRouter, Depends, Response
 
 from scheduler_center.core.common.clock import BEIJING
 from scheduler_center.core.common.errors import Invalid, Rejected, Unavailable
-from scheduler_center.core.web.dependencies import DatabaseDep
+from scheduler_center.core.web.dependencies import ApiSettingsDep, DatabaseDep, PagingDep
+from scheduler_center.core.web.schemas import Page
 from scheduler_center.modules.batch.models import Batch
 from scheduler_center.modules.batch.repository import BatchRepository
 from scheduler_center.modules.executor.dependencies import GatewayDep
 from scheduler_center.modules.executor.models import ExecutorKind
 from scheduler_center.modules.report.stats_workbook import AiUsage, build_stats_workbook
+from scheduler_center.modules.stats.crawl_ips import CrawlIpRepository
 from scheduler_center.modules.stats.repository import StatsRepository
-from scheduler_center.modules.stats.schemas import Bucket, Stats
+from scheduler_center.modules.stats.schemas import Bucket, CrawlIpBatch, CrawlIpStats, Stats
 
 router = APIRouter(prefix="/stats", tags=["数据看板"])
 MAX_BUCKETS = 800
@@ -55,6 +57,22 @@ async def get_stats(period: PeriodDep, database: DatabaseDep) -> Stats:
     """
     async with database.transaction() as session:
         return await _stats(StatsRepository(session), period)
+
+
+@router.get("/crawl-ips")
+async def get_crawl_ips(
+    database: DatabaseDep, settings: ApiSettingsDep, batch_id: UUID | None = None
+) -> CrawlIpStats:
+    """按批次统计仍在保留期内的采集租约，默认优先选择有租约的运行批次。"""
+    async with database.transaction() as session:
+        return await CrawlIpRepository(session).stats(batch_id, settings)
+
+
+@router.get("/crawl-ip-batches")
+async def list_crawl_ip_batches(database: DatabaseDep, paging: PagingDep) -> Page[CrawlIpBatch]:
+    """采集 IP 看板的可选批次，包含租约明细已清理的历史批次。"""
+    async with database.transaction() as session:
+        return await CrawlIpRepository(session).batch_page(paging.offset, paging.size)
 
 
 @router.get("/export")

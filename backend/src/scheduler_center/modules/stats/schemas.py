@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from scheduler_center.modules.batch.models import CreatorProgress, WorkStatus
+from scheduler_center.modules.batch.models import BatchStatus, CreatorProgress, WorkStatus
 from scheduler_center.modules.crawl.models import CrawlConclusion
 
 
@@ -99,3 +99,60 @@ class Stats(BaseModel):
     """统计范围内的批次（或指定批次）当前各阶段的达人数。"""
     videos: dict[WorkStatus, int]
     """同上，当前各状态的视频数。"""
+
+
+class CrawlIpBatch(BaseModel):
+    id: UUID
+    name: str
+    status: BatchStatus
+    has_leases: bool
+
+
+class CrawlIpRisk(BaseModel):
+    """一次租约最多归入一类风控。"""
+
+    empty_body: int
+    challenge: int
+    throttled: int
+    blocked: int
+    other: int
+
+
+class CrawlIpMetrics(BaseModel):
+    crawl_leases: int
+    collected_creators: int
+    """按账号去重的成功采集人数，包含列表完整但没有符合条件作品的达人。"""
+    private: int
+    not_found: int
+    login_required: int
+    risk_count: int
+    risk_rate_pct: float
+    risk_breakdown: CrawlIpRisk
+    active_hours: float
+    """本行首末租约发放时间之差。"""
+    creators_per_hour: float | None
+    """用全批次可见租约的首末跨度折算，不足 60 秒时为空。"""
+    leases_per_hour: float | None
+
+
+class CrawlIpSummary(CrawlIpMetrics):
+    active_ips: int
+    first_lease_at: datetime | None
+    last_lease_at: datetime | None
+
+
+class CrawlIpRow(CrawlIpMetrics):
+    line: str
+    proxy_name: str
+    creator_share_pct: float
+    risk_share_pct: float
+    backoff_state: Literal["normal", "cooling", "probing"]
+    backoff_step: int
+    backoff_until: datetime | None
+
+
+class CrawlIpStats(BaseModel):
+    batch: CrawlIpBatch | None
+    data_status: Literal["available", "no_batch", "no_leases", "history_unavailable"]
+    summary: CrawlIpSummary
+    lines: list[CrawlIpRow]

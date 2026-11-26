@@ -18,6 +18,7 @@ import { useFilters } from "@/lib/params";
 import { type Tone, toneClass } from "@/lib/status";
 import { cacheRate, sum, type UsageRow } from "@/lib/usage";
 import { AiTrend, Trend } from "./charts";
+import { CrawlIpPanel } from "./crawl-ips";
 import { FUNNEL, findings, modelLoads, rate } from "./insights";
 import {
   AiTable,
@@ -119,7 +120,7 @@ export function StatsPage() {
           )
         }
       />
-      <Panel className="rise flex flex-wrap items-center gap-3 p-3">
+      <Panel className="rise flex flex-wrap items-center gap-3 p-3 [&>[role=group]]:flex-wrap">
         <Choice
           label="时间段"
           options={PRESETS}
@@ -128,11 +129,11 @@ export function StatsPage() {
           disabled={values.batch ? [] : ["batch"]}
         />
         {preset === "custom" && (
-          <span className="flex items-center gap-2 text-xs">
+          <span className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
             <Input
               type="datetime-local"
               aria-label="开始时间"
-              className="h-8 w-48"
+              className="h-8 w-full sm:w-48"
               value={values.from ?? ""}
               onChange={(event) => set({ from: event.target.value })}
             />
@@ -140,7 +141,7 @@ export function StatsPage() {
             <Input
               type="datetime-local"
               aria-label="结束时间"
-              className="h-8 w-48"
+              className="h-8 w-full sm:w-48"
               value={values.to ?? ""}
               onChange={(event) => set({ to: event.target.value })}
             />
@@ -165,7 +166,7 @@ export function StatsPage() {
             })
           }
         >
-          <SelectTrigger size="sm" className="ml-auto w-64" aria-label="批次">
+          <SelectTrigger size="sm" className="w-full sm:ml-auto sm:w-64" aria-label="批次">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -189,6 +190,7 @@ export function StatsPage() {
           <Notice>{preset === "custom" ? "选择开始和结束时间" : "这个批次还没开始"}</Notice>
         </Panel>
       )}
+      <CrawlIpPanel />
     </>
   );
 }
@@ -230,7 +232,7 @@ function Board({
         ))}
         <CacheTile usage={usage} />
       </div>
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Section title="分时趋势">
           <Panel>
             <Trend stats={stats} />
@@ -249,7 +251,7 @@ function Board({
           </Section>
         </div>
       </div>
-      <div className="grid items-start gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
         <Section title="实时负载" extra={<Hint>此刻的并发占用，每 5 秒刷新</Hint>}>
           <Panel>
             <LiveLoad />
@@ -261,7 +263,7 @@ function Board({
           </Panel>
         </Section>
       </div>
-      <div className="grid items-start gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
         <Section title="AI 调用趋势">
           <Panel>
             {usage.error ? (
@@ -285,7 +287,7 @@ function Board({
           <AiTable loads={loads} error={usage.error} />
         </Panel>
       </Section>
-      <div className="grid items-start gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
         <Section title="用时" extra={<Hint>这段时间里做完的任务</Hint>}>
           <Panel>
             <DurationTable rows={stats.durations} />
