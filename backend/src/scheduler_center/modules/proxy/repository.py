@@ -11,6 +11,7 @@ from scheduler_center.core.database.repository import Repository
 from scheduler_center.modules.proxy.models import (
     CLUSTER,
     LEASE_TTL,
+    CrawlLinePolicy,
     Lease,
     Line,
     ListingResult,
@@ -24,6 +25,7 @@ from scheduler_center.modules.proxy.models import (
 )
 from scheduler_center.modules.proxy.tables import (
     proxies,
+    proxy_crawl_line_policy,
     proxy_folders,
     proxy_leases,
     proxy_lines,
@@ -249,11 +251,64 @@ class LineRepository(Repository):
         )
         return {line.key: line for line in await self._session.scalars(stmt)}
 
+    async def for_keys(self, use: Use, keys: Sequence[str]) -> dict[str, Line]:
+        stmt = select(Line).where(proxy_lines.c.use == use, proxy_lines.c.key.in_(keys))
+        return {line.key: line for line in await self._session.scalars(stmt)}
+
     async def all(self) -> dict[tuple[Use, str], Line]:
         return {(line.use, line.key): line for line in await self._session.scalars(select(Line))}
 
 
+class CrawlPolicyRepository(Repository):
+    async def for_keys(
+        self, epoch: str, keys: Sequence[str], now: datetime, *, lock: bool
+    ) -> dict[str, CrawlLinePolicy]:
+        column = proxy_crawl_line_policy.c
+        stmt = select(CrawlLinePolicy).where(
+            column.policy_epoch == epoch, column.line_key.in_(keys)
+        )
+        if lock:
+            rows = [
+                {"policy_epoch": epoch, "line_key": key, "evidence_since": now, "empty_step": 0}
+                for key in sorted(keys)
+            ]
+            await self._session.execute(
+                upsert(proxy_crawl_line_policy).values(rows).on_conflict_do_nothing()
+            )
+            stmt = (
+                stmt.order_by(column.line_key)
+                .with_for_update(key_share=True)
+                .execution_options(populate_existing=True)
+            )
+        return {state.line_key: state for state in await self._session.scalars(stmt)}
+
+    async def empty_tasks(self, state: CrawlLinePolicy, since: datetime) -> int:
+        column = proxy_leases.c
+        stmt = (
+            select(func.count(column.task_id.distinct()))
+            .select_from(proxy_leases.join(proxies, proxies.c.id == column.proxy_id))
+            .where(
+                column.use == Use.CRAWL,
+                column.line == state.line_key,
+                column.crawl_policy_epoch == state.policy_epoch,
+                column.acquired_at >= state.evidence_since,
+                column.released_at >= since,
+                column.released_at < column.expires_at,
+                column.listing_result == ListingResult.EMPTY_RESPONSE,
+                proxies.c.line == state.line_key,
+                proxies.c.config_revision.is_not_distinct_from(column.proxy_revision),
+            )
+        )
+        return await self._session.scalar(stmt) or 0
+
+
 class LeaseRepository(Repository):
+    async def probe_leases(self, ids: Sequence[UUID]) -> dict[UUID, Lease]:
+        if not ids:
+            return {}
+        stmt = select(Lease).where(proxy_leases.c.id.in_(ids))
+        return {lease.id: lease for lease in await self._session.scalars(stmt)}
+
     async def tasks_with_empty_lists(self, lease: Lease, since: datetime) -> int:
         """同一线路最近一份完整列表之后，返回空正文的不同任务数。"""
         column = proxy_leases.c

@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Annotated, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +16,16 @@ class Settings(BaseSettings):
     """与爬取程序、分析服务使用同一个 Redis 和命名空间。"""
     legacy_crawler_dispatch: bool = False
     """使用旧版 Redis 爬虫派单；切换时 API、Worker、事件接收进程应使用相同配置。"""
+    crawl_policy_enabled: bool = False
+    crawl_policy_devices: tuple[Annotated[str, Field(min_length=1, max_length=128)], ...] = ()
+    crawl_policy_exits: tuple[Annotated[str, Field(min_length=1, max_length=160)], ...] = ()
+    crawl_policy_epoch: str = Field(default="", max_length=128)
+    crawl_pacing_min_seconds: int = Field(default=45, ge=0)
+    crawl_empty_backoff_steps: tuple[Annotated[int, Field(gt=0)], ...] = (60, 180, 360, 600)
+    crawl_empty_window_seconds: int = Field(default=300, gt=0)
+    crawl_empty_tasks: int = Field(default=3, gt=0)
+    crawl_empty_warm_guard: bool = True
+    crawl_warm_bootstrap_min_seconds: int = Field(default=90, gt=0)
     material_root: Path = Path("data/materials")
     """爬取程序上传的原视频，API 与 Worker 共享。"""
     heartbeat_timeout_seconds: float = 60
@@ -26,6 +37,33 @@ class Settings(BaseSettings):
     proxy_speed_size: int = 10_000_000
     """测速文件的字节数，换测速地址时一起改；收到的字节数对不上就算测速失败。"""
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_crawl_policy(self) -> Self:
+        if not self.crawl_policy_enabled:
+            return self
+        if tuple(sorted(set(self.crawl_empty_backoff_steps))) != self.crawl_empty_backoff_steps:
+            raise ValueError("SC_CRAWL_EMPTY_BACKOFF_STEPS must be strictly increasing")
+        if not (self.crawl_pacing_min_seconds or self.crawl_empty_backoff_steps):
+            return self
+        if self.legacy_crawler_dispatch:
+            raise ValueError("SC_CRAWL_POLICY_ENABLED requires PostgreSQL task claims")
+        scopes = (*self.crawl_policy_devices, *self.crawl_policy_exits)
+        if (
+            not self.crawl_policy_epoch.strip()
+            or not self.crawl_policy_devices
+            or not self.crawl_policy_exits
+            or any(not value.strip() or "*" in value for value in scopes)
+        ):
+            raise ValueError("Crawl policy requires an epoch and explicit device and exit lists")
+        return self
+
+    def crawl_policy_applies(self, device: str) -> bool:
+        return (
+            self.crawl_policy_enabled
+            and bool(self.crawl_pacing_min_seconds or self.crawl_empty_backoff_steps)
+            and device in self.crawl_policy_devices
+        )
 
 
 class WorkerSettings(Settings):

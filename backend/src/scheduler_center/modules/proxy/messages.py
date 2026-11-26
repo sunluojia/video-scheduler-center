@@ -26,6 +26,8 @@ class LeaseRequest(BaseModel):
     attempt_id: UUID | None = None
     avoid: list[str] = Field(default_factory=list, max_length=50)
     """这次任务已经失败过的线路；没有别的线路时仍会分到它们。"""
+    warm_bootstrap: bool = False
+    """仅预热可用：本机没有健康的采集会话，需要冷却到期后的引导预热。"""
 
 
 class Route(BaseModel):
@@ -75,6 +77,7 @@ class LeaseReply(BaseModel):
     lease: LeaseGrant | None = None
     retry_after: int | None = None
     reason: str | None = None
+    reason_code: str | None = Field(default=None, exclude_if=lambda code: code is None)
 
 
 class LeaseResult(BaseModel):

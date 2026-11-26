@@ -431,6 +431,22 @@ class Line:
 
 
 @dataclass
+class CrawlLinePolicy:
+    """采集专用状态。同一代的同一出口在多个 API 进程间共享。"""
+
+    policy_epoch: str
+    line_key: str
+    evidence_since: datetime
+    empty_step: int = 0
+    empty_until: datetime | None = None
+    probe_lease_id: UUID | None = None
+    probe_granted_at: datetime | None = None
+    last_crawl_acquired_at: datetime | None = None
+    last_valid_crawl_released_at: datetime | None = None
+    last_bootstrap_at: datetime | None = None
+
+
+@dataclass
 class Lease:
     """一次使用线路的租约：申请时发出，归还时附上表现。"""
 
@@ -450,6 +466,7 @@ class Lease:
     proxy_revision: UUID | None = None
     listing_result: ListingResult | None = None
     attempt_id: UUID | None = None
+    crawl_policy_epoch: str | None = None
 
     def renew(self, now: datetime) -> None:
         self.expires_at = now + LEASE_TTL

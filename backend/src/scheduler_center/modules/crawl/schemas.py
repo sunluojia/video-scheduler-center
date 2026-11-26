@@ -34,8 +34,15 @@ class ClaimedTask(BaseModel):
     body: CrawlCreator | DownloadVideo
 
 
+class CrawlWait(BaseModel):
+    retry_after: int
+    reason: str
+    reason_code: str | None = None
+
+
 class ClaimReply(BaseModel):
     tasks: list[ClaimedTask]
+    crawl_wait: CrawlWait | None = Field(default=None, exclude_if=lambda wait: wait is None)
 
 
 class DeferRequest(ExecutorSession):

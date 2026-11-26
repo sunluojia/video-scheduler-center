@@ -132,6 +132,30 @@ class CrawlerAttempts(Repository):
         )
         return (await self._session.scalar(stmt)) is not None
 
+    async def lease_kind(
+        self, task_id: UUID | None, attempt_id: UUID | None, executor_id: str
+    ) -> CrawlerRunKind | None:
+        """核对当前有效认领。先锁认领，再锁线路，顺序与心跳续租一致。"""
+        if task_id is None or attempt_id is None:
+            return None
+        stmt = (
+            select(runs.c.kind)
+            .select_from(tasks.join(runs, _current_run()).join(attempts, _attempt_run()))
+            .where(
+                tasks.c.id == task_id,
+                tasks.c.status.in_(ACTIVE),
+                tasks.c.current_attempt_id == attempt_id,
+                runs.c.current_attempt_id == attempt_id,
+                runs.c.status == CrawlerRunStatus.RUNNING,
+                attempts.c.attempt_id == attempt_id,
+                attempts.c.executor_id == executor_id,
+                attempts.c.status.in_(ACTIVE_ATTEMPTS),
+                attempts.c.lease_expires_at > func.clock_timestamp(),
+            )
+            .with_for_update(of=attempts, key_share=True)
+        )
+        return await self._session.scalar(stmt)
+
     async def record_route(self, attempt_id: UUID, device: str, route_kind: str) -> None:
         await self._session.execute(
             update(attempts)

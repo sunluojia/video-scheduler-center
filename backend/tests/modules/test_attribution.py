@@ -578,12 +578,14 @@ async def test_migration_0016_backfills_published_and_accepted_tasks(
     config.set_main_option("sqlalchemy.url", database_url)
     await database.dispose()
     await asyncio.to_thread(command.downgrade, config, "0015")
-    await asyncio.to_thread(command.upgrade, config, "0016")
-
-    publisher = OutboxPublisher(database, StubBroker())
-    assert await publisher.publish_pending() == 0  # 历史的待发 Redis 消息不会重复投递
-    claimed = await claim(service, owner("new-device"), crawl=5, download=5)
-    assert [item["body"] for item in claimed] == [published, accepted]
-    assert all(item["body"]["batch_id"] == str(batch.id) for item in claimed)
-    task = await load(database, CrawlerTask, previous.id)
-    assert task.accepted_at == previous.accepted_at
+    try:
+        await asyncio.to_thread(command.upgrade, config, "0016")
+        publisher = OutboxPublisher(database, StubBroker())
+        assert await publisher.publish_pending() == 0  # 历史的待发 Redis 消息不会重复投递
+        claimed = await claim(service, owner("new-device"), crawl=5, download=5)
+        assert [item["body"] for item in claimed] == [published, accepted]
+        assert all(item["body"]["batch_id"] == str(batch.id) for item in claimed)
+        task = await load(database, CrawlerTask, previous.id)
+        assert task.accepted_at == previous.accepted_at
+    finally:
+        await asyncio.to_thread(command.upgrade, config, "head")

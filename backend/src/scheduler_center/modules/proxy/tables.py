@@ -21,6 +21,7 @@ from scheduler_center.core.database.mapping import (
     timestamp,
 )
 from scheduler_center.modules.proxy.models import (
+    CrawlLinePolicy,
     Lease,
     Line,
     ListingResult,
@@ -120,6 +121,21 @@ proxy_lines = Table(
     Column("updated_at", timestamp(), nullable=False),
 )
 
+proxy_crawl_line_policy = Table(
+    "proxy_crawl_line_policy",
+    metadata,
+    Column("policy_epoch", String(128), primary_key=True),
+    Column("line_key", String(160), primary_key=True),
+    Column("evidence_since", timestamp(), nullable=False),
+    Column("empty_step", Integer, nullable=False),
+    Column("empty_until", timestamp()),
+    Column("probe_lease_id", Uuid),
+    Column("probe_granted_at", timestamp()),
+    Column("last_crawl_acquired_at", timestamp()),
+    Column("last_valid_crawl_released_at", timestamp()),
+    Column("last_bootstrap_at", timestamp()),
+)
+
 proxy_leases = Table(
     "proxy_leases",
     metadata,
@@ -138,6 +154,7 @@ proxy_leases = Table(
     Column("detail", Text),
     Column("proxy_revision", Uuid),
     Column("listing_result", enum_column(ListingResult)),
+    Column("crawl_policy_epoch", String(128)),
     Index("ix_proxy_leases_open", "use", "line", postgresql_where=text("released_at IS NULL")),
     Index(
         "ix_proxy_leases_listing_result",
@@ -153,4 +170,5 @@ mapper_registry.map_imperatively(Proxy, proxies)
 mapper_registry.map_imperatively(ProxyFolder, proxy_folders)
 mapper_registry.map_imperatively(ProxyRule, proxy_rules)
 mapper_registry.map_imperatively(Line, proxy_lines)
+mapper_registry.map_imperatively(CrawlLinePolicy, proxy_crawl_line_policy)
 mapper_registry.map_imperatively(Lease, proxy_leases)

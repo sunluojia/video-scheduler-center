@@ -1321,6 +1321,7 @@ export interface components {
         ClaimReply: {
             /** Tasks */
             tasks: components["schemas"]["ClaimedTask"][];
+            crawl_wait?: components["schemas"]["CrawlWait"] | null;
         };
         /** ClaimRequest */
         ClaimRequest: {
@@ -1508,6 +1509,15 @@ export interface components {
             works_found: number;
             /** Max Works */
             max_works: number;
+        };
+        /** CrawlWait */
+        CrawlWait: {
+            /** Retry After */
+            retry_after: number;
+            /** Reason */
+            reason: string;
+            /** Reason Code */
+            reason_code?: string | null;
         };
         /**
          * CrawledProfile
@@ -2233,6 +2243,8 @@ export interface components {
             retry_after?: number | null;
             /** Reason */
             reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
         };
         /** LeaseRequest */
         LeaseRequest: {
@@ -2245,6 +2257,11 @@ export interface components {
             attempt_id?: string | null;
             /** Avoid */
             avoid?: string[];
+            /**
+             * Warm Bootstrap
+             * @default false
+             */
+            warm_bootstrap: boolean;
         };
         /** LeaseResult */
         LeaseResult: {

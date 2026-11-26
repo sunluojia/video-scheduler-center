@@ -1,10 +1,11 @@
+import logging
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, Request
 
 from scheduler_center.core.common.errors import Conflict, Invalid
-from scheduler_center.core.web.dependencies import DatabaseDep, LegacyCrawlerDispatchDep
+from scheduler_center.core.web.dependencies import ApiSettingsDep, DatabaseDep
 from scheduler_center.core.web.schemas import ErrorDetail
 from scheduler_center.modules.crawl.attempts import CrawlerAttempts
 from scheduler_center.modules.crawl.models import AttemptRef, CrawlerRunKind
@@ -12,13 +13,16 @@ from scheduler_center.modules.crawl.schemas import (
     ClaimedTask,
     ClaimReply,
     ClaimRequest,
+    CrawlWait,
     DeferRequest,
 )
 from scheduler_center.modules.flow.service import Flow
 from scheduler_center.modules.live.notifier import Live
 from scheduler_center.modules.material.dependencies import StoreDep
 from scheduler_center.modules.material.store import ContentMismatch
+from scheduler_center.modules.proxy.dispatcher import Dispatcher
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["爬取程序"])
 
 
@@ -27,16 +31,31 @@ router = APIRouter(tags=["爬取程序"])
     responses={409: {"model": ErrorDetail, "description": "当前使用旧版 Redis 派单"}},
 )
 async def claim_tasks(
-    body: ClaimRequest, database: DatabaseDep, legacy_crawler_dispatch: LegacyCrawlerDispatchDep
+    body: ClaimRequest, database: DatabaseDep, settings: ApiSettingsDep
 ) -> ClaimReply:
     """按设备剩余槽位原子认领可执行任务，租期 90 秒。"""
-    if legacy_crawler_dispatch:
+    if settings.legacy_crawler_dispatch:
         raise Conflict("当前使用 Redis 爬虫派单")
     limits = {
         CrawlerRunKind.CRAWL: body.kinds.crawl_creator,
         CrawlerRunKind.DOWNLOAD: body.kinds.download_video,
     }
     async with database.transaction() as session:
+        wait = None
+        if body.kinds.crawl_creator and settings.crawl_policy_applies(body.executor_id):
+            allowed, wait = await Dispatcher(session, settings).limit_crawl_claims(
+                body.executor_id, body.kinds.crawl_creator
+            )
+            limits[CrawlerRunKind.CRAWL] = allowed
+            if allowed < body.kinds.crawl_creator:
+                log.info(
+                    "crawl_policy event=claim_limited device=%s skipped=%s "
+                    "reason=%s retry_after=%s",
+                    body.executor_id,
+                    body.kinds.crawl_creator - allowed,
+                    wait.code if wait else "available_slots",
+                    wait.seconds if wait else None,
+                )
         claimed = await CrawlerAttempts(session).claim(
             body.executor_id, body.executor_session_id, limits
         )
@@ -57,7 +76,12 @@ async def claim_tasks(
                     body=run.payload,
                 )
                 for run, attempt in claimed
-            ]
+            ],
+            crawl_wait=(
+                CrawlWait(retry_after=wait.seconds, reason=wait.reason, reason_code=wait.code)
+                if wait
+                else None
+            ),
         )
 
 

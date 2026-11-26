@@ -1,15 +1,21 @@
 """线路分配：服务每次要访问外网前按用途申请一条线路，用完归还并报告线路表现。"""
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 from random import choices
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from scheduler_center.core.common.clock import utcnow
+from scheduler_center.core.config.settings import Settings
+from scheduler_center.modules.proxy.crawl_policy import BUSY_RECHECK, CrawlPolicy, CrawlRole
 from scheduler_center.modules.proxy.models import (
     LEASE_TTL,
+    CrawlLinePolicy,
     Lease,
     Line,
     LineState,
@@ -52,6 +58,7 @@ class Grant:
 class Wait:
     seconds: int
     reason: str
+    code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,29 +67,113 @@ class Candidate:
     target: RuleTarget | None = None
 
 
+@dataclass
+class CrawlAccess:
+    free: dict[str, int]
+    bootstrap: list[str]
+    early: Line | None
+    wait: Wait | None
+
+
 class Dispatcher:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings | None = None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._proxies = ProxyRepository(session)
         self._folders = FolderRepository(session)
         self._rules = RuleRepository(session)
         self._lines = LineRepository(session)
         self._leases = LeaseRepository(session)
         self._session = session
+        self._policy = (
+            CrawlPolicy(session, settings) if settings and settings.crawl_policy_enabled else None
+        )
+        self._clock = clock or utcnow
 
     async def acquire(
-        self, device: str, use: Use, task_id: UUID | None, avoid: set[str], now: datetime
+        self,
+        device: str,
+        use: Use,
+        task_id: UUID | None,
+        avoid: set[str],
+        now: datetime,
+        *,
+        crawl_role: CrawlRole | None = None,
+        warm_bootstrap: bool = False,
     ) -> Grant | Wait:
         """按设备在这个用途上生效的规则挑一条线路：避开这次任务失败过的线路，除非别无选择。"""
         rule, cluster = await self._rules.effective(use, device), await self._rules.cluster(use)
         candidates = await self.candidates(use, device, rule, cluster.mode)
         if not candidates:
-            return Wait(60, "规则里没有可用的代理")
+            policy = self._policy
+            code = None
+            if (
+                use == Use.CRAWL
+                and crawl_role == CrawlRole.LISTING
+                and policy
+                and policy.settings.crawl_policy_applies(device)
+            ):
+                code = "crawl_line_busy"
+            return Wait(60, "规则里没有可用的代理", code)
         own = rule.source in (RuleSource.DIRECT, RuleSource.LOCAL_PORT)
         lines = await self._lines.lock(use, list(candidates), device if own else None, now)
+        controlled = self._controlled(device, use, crawl_role, candidates)
+        line_limit = rule.device_line_limit or cluster.line_limit
+        if controlled:
+            assert self._policy is not None and crawl_role is not None
+            states = await self._policy.states.for_keys(
+                self._policy.epoch, controlled, self._clock(), lock=True
+            )
+            now = self._clock()
+            access = await self._crawl_access(
+                candidates,
+                lines,
+                states,
+                controlled,
+                line_limit,
+                crawl_role,
+                now,
+                lock=True,
+                warm_bootstrap=warm_bootstrap,
+            )
+            free = list(access.free) or access.bootstrap
+            if free:
+                preferred = [key for key in free if key not in avoid] or free
+                key = self._pick(cluster.mode, rule.cursor, candidates, preferred)
+            elif access.early:
+                key = access.early.key
+            else:
+                assert access.wait is not None
+                return access.wait
+            probe = access.early is not None or lines[key].state(now) == LineState.PROBING
+            result = await self._grant(
+                device,
+                use,
+                task_id,
+                key,
+                candidates[key].proxy,
+                rule,
+                probe,
+                now,
+                refresh_clock=True,
+            )
+            if isinstance(result, Grant):
+                if key in states:
+                    self._policy.granted(states[key], result.lease, crawl_role)
+                if access.early:
+                    access.early.probe_at = result.lease.acquired_at
+                elif cluster.mode == PickMode.ROTATE:
+                    rule.cursor = key
+            elif crawl_role == CrawlRole.LISTING:
+                result.code = "crawl_line_busy"
+            return result
+
         in_use = await self._leases.in_use(now, use=use, keys=list(candidates))
         usable = [key for key in candidates if lines[key].state(now) in _USABLE]
-
-        line_limit = rule.device_line_limit or cluster.line_limit
 
         def capacity(key: str) -> int:
             return 1 if lines[key].state(now) == LineState.PROBING else line_limit
@@ -110,6 +201,116 @@ class Dispatcher:
         seconds = int((earliest - now).total_seconds())
         return Wait(min(max(seconds, 5), 60), "线路都在冷却或限流")
 
+    async def limit_crawl_claims(self, device: str, limit: int) -> tuple[int, Wait | None]:
+        """只读预判。认领和线路租约各自独立，发放时仍会持锁复核。"""
+        policy = self._policy
+        if not limit or policy is None or not policy.settings.crawl_policy_applies(device):
+            return limit, None
+        use = Use.CRAWL
+        rule, cluster = await self._rules.effective(use, device), await self._rules.cluster(use)
+        candidates = await self.candidates(use, device, rule, cluster.mode)
+        if not candidates:
+            return 0, Wait(60, "规则里没有可用的代理", "crawl_line_busy")
+        controlled = self._controlled(device, use, CrawlRole.LISTING, candidates)
+        if not controlled:
+            return limit, None
+        lines = await self._lines.for_keys(use, list(candidates))
+        states = await policy.states.for_keys(policy.epoch, controlled, self._clock(), lock=False)
+        access = await self._crawl_access(
+            candidates,
+            lines,
+            states,
+            controlled,
+            rule.device_line_limit or cluster.line_limit,
+            CrawlRole.LISTING,
+            self._clock(),
+            lock=False,
+        )
+        slots = sum(access.free.values()) + int(access.early is not None)
+        return min(limit, slots), access.wait if slots == 0 else None
+
+    def _controlled(
+        self,
+        device: str,
+        use: Use,
+        role: CrawlRole | None,
+        candidates: dict[str, Candidate],
+    ) -> list[str]:
+        policy = self._policy
+        if use != Use.CRAWL or role is None or policy is None:
+            return []
+        settings = policy.settings
+        if not settings.crawl_policy_applies(device):
+            return []
+        if role == CrawlRole.WARM and not (policy.steps and settings.crawl_empty_warm_guard):
+            return []
+        return [
+            key
+            for key, item in candidates.items()
+            if item.proxy is not None and key in settings.crawl_policy_exits
+        ]
+
+    async def _crawl_access(
+        self,
+        candidates: dict[str, Candidate],
+        lines: dict[str, Line],
+        states: dict[str, CrawlLinePolicy],
+        controlled: list[str],
+        line_limit: int,
+        role: CrawlRole,
+        now: datetime,
+        *,
+        lock: bool,
+        warm_bootstrap: bool = False,
+    ) -> CrawlAccess:
+        policy = self._policy
+        assert policy is not None
+        probe_waits = await policy.probe_waits(states, now, lock=lock)
+        in_use = await self._leases.in_use(now, use=Use.CRAWL, keys=list(candidates))
+        free, bootstrap, early_lines, waits = {}, [], [], []
+        usable_but_full = False
+        for key in candidates:
+            line, state = lines.get(key), states.get(key)
+            recovering = policy.recovers(state)
+            general = line.state(now) if line else LineState.OPEN
+            delays = (
+                policy.delays(
+                    state,
+                    role,
+                    now,
+                    probe_waits.get(key),
+                    warm_bootstrap=warm_bootstrap,
+                )
+                if state
+                else []
+            )
+            limit = 1 if recovering or general == LineState.PROBING else line_limit
+            slots = limit - in_use.get(key, 0)
+            if general not in _USABLE:
+                assert line is not None
+                if not recovering and not delays:
+                    early_lines.append(line)
+                delays.append((line.resume_at(), "crawl_line_busy"))
+            if slots <= 0:
+                usable_but_full |= general in _USABLE and not delays and not recovering
+                delays.append((now + BUSY_RECHECK, "crawl_line_busy"))
+            if delays:
+                until, code = max(delays, key=lambda delay: delay[0])
+                if role == CrawlRole.WARM:
+                    code = "warm_empty_wait" if recovering else None
+                waits.append((until, code))
+            elif role == CrawlRole.WARM and recovering:
+                bootstrap.append(key)
+            else:
+                free[key] = min(slots, 1) if key in controlled and policy.pacing else slots
+        if free or bootstrap:
+            return CrawlAccess(free, bootstrap, None, None)
+        if not usable_but_full and (early := _early_probe(early_lines, in_use, now)):
+            return CrawlAccess({}, [], early, None)
+        until, code = min(waits, key=lambda wait: wait[0])
+        wait = Wait(max(1, ceil((until - now).total_seconds())), _CRAWL_WAIT_REASONS[code], code)
+        return CrawlAccess({}, [], None, wait)
+
     async def release(
         self,
         lease_id: UUID,
@@ -124,7 +325,22 @@ class Dispatcher:
         lease = await self._leases.require(Lease, lease_id, lock=True)
         if lease.released_at:
             return
+        policy = self._policy
+        if not (
+            policy
+            and lease.use == Use.CRAWL
+            and lease.task_id is not None
+            and lease.crawl_policy_epoch
+            and policy.settings.crawl_policy_applies(lease.device)
+            and lease.line in policy.settings.crawl_policy_exits
+        ):
+            policy = None
+        line, proxy = None, None
+        if policy:
+            line, proxy = await self._lock_feedback(lease, now)
+            now = self._clock()
         lease.release(outcome, detail, now)
+        listing_failure = False
         if lease.use == Use.CRAWL and lease.task_id is not None:
             if outcome == Outcome.NORMAL and listing_result == ListingResult.COMPLETE:
                 lease.listing_result = listing_result
@@ -133,13 +349,15 @@ class Dispatcher:
                 ListingResult.EMPTY_RESPONSE,
             ):
                 lease.listing_result = listing_result
-                if listing_result == ListingResult.EMPTY_RESPONSE:
-                    await self._report_empty_list(lease, now)
-                return
-        line = (await self._lines.lock(lease.use, [lease.line], None, now))[lease.line]
-        proxy = lease.proxy_id and await self._proxies.get(Proxy, lease.proxy_id, lock=True)
-        if proxy and (proxy.config_revision != lease.proxy_revision or proxy.line != lease.line):
-            proxy = None  # 旧连接的结果不能覆盖当前代理的测试状态
+                listing_failure = True
+        if policy and lease.crawl_policy_epoch == policy.epoch and proxy and now < lease.expires_at:
+            await policy.released(lease, now)
+        if listing_failure:
+            if listing_result == ListingResult.EMPTY_RESPONSE and not (policy and policy.steps):
+                await self._report_empty_list(lease, now, line=line)
+            return
+        if line is None:
+            line, proxy = await self._lock_feedback(lease, now)
         if outcome == Outcome.THROTTLED:
             line.throttle(now, retry_after or 60, detail)
         elif lease.proxy_id and outcome in (Outcome.PROXY_DOWN, Outcome.AUTH_FAILED):
@@ -152,8 +370,18 @@ class Dispatcher:
             if proxy and outcome == Outcome.NORMAL:
                 proxy.worked()
 
-    async def _report_empty_list(self, lease: Lease, now: datetime) -> None:
+    async def _lock_feedback(self, lease: Lease, now: datetime) -> tuple[Line, Proxy | None]:
         line = (await self._lines.lock(lease.use, [lease.line], None, now))[lease.line]
+        proxy = lease.proxy_id and await self._proxies.get(Proxy, lease.proxy_id, lock=True)
+        if proxy and (proxy.config_revision != lease.proxy_revision or proxy.line != lease.line):
+            proxy = None  # 旧连接的结果不能覆盖当前代理的测试状态
+        return line, proxy
+
+    async def _report_empty_list(
+        self, lease: Lease, now: datetime, *, line: Line | None = None
+    ) -> None:
+        if line is None:
+            line = (await self._lines.lock(lease.use, [lease.line], None, now))[lease.line]
         if line.state(now) != LineState.OPEN:
             return
         since = now - LISTING_WINDOW
@@ -223,6 +451,8 @@ class Dispatcher:
         rule: ProxyRule,
         probe: bool,
         now: datetime,
+        *,
+        refresh_clock: bool = False,
     ) -> Grant | Wait:
         if proxy is not None:
             folder_id = proxy.folder_id
@@ -234,8 +464,11 @@ class Dispatcher:
                 or proxy.line != key
                 or proxy.folder_id != folder_id
                 or not serves(proxy.uses, use)
+                or (refresh_clock and proxy.bound_device not in (None, device))
             ):
                 return Wait(1, "代理配置已变更，稍后重新分配")
+        if refresh_clock:
+            now = self._clock()
         lease = Lease(
             device,
             use,
@@ -253,6 +486,14 @@ class Dispatcher:
 
 
 _USABLE = (LineState.OPEN, LineState.PROBING)
+_CRAWL_WAIT_REASONS = {
+    "crawl_paced": "采集线路正在节流",
+    "crawl_empty_cooldown": "作品列表空正文，采集线路正在冷却",
+    "crawl_probe_busy": "采集线路正在等作品列表探针",
+    "crawl_line_busy": "采集线路正在使用、冷却或限流",
+    "warm_empty_wait": "采集线路正在冷却或等作品列表探针，稍后预热",
+    None: "预热线路正在使用、冷却或限流",
+}
 
 
 def _selected_candidates(
