@@ -116,11 +116,11 @@ class ExecutorView(BaseModel):
 
 
 class Slots(BaseModel):
-    crawl_slots: int = Field(ge=1, le=16)
+    crawl_slots: int = Field(ge=0, le=16)
     """同时获取几个达人，每个开一个 Chrome 窗口（约 400 MB）。"""
-    download_slots: int = Field(ge=1, le=80)
+    download_slots: int = Field(ge=0, le=80)
     """同时下载几条视频。"""
-    warm_slots: int | None = Field(default=None, ge=1, le=16)
+    warm_slots: int | None = Field(default=None, ge=0, le=16)
     """同时预热几个身份。省略时保留当前设置。"""
 
 

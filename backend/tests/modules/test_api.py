@@ -433,18 +433,25 @@ async def test_crawler_slots_set_on_the_page_go_out_with_the_heartbeat(client, s
     await service.put("/api/crawler-services/c1", json=body)
 
     path = "/api/executors/crawler/c1/slots"
-    slots = {"crawl_slots": 4, "download_slots": 6, "warm_slots": 3}
-    response = await client.put(path, json=slots)
-    assert response.json()["crawl_slots"] == 4
-    assert response.json()["warm_slots"] == 3
-    reply = (await service.put("/api/crawler-services/c1", json=body)).json()
-    assert (reply["crawl_slots"], reply["download_slots"], reply["warm_slots"]) == (4, 6, 3)
+    zero_slots = {"crawl_slots": 0, "download_slots": 0, "warm_slots": 0}
+    for slots in ({"crawl_slots": 4, "download_slots": 6, "warm_slots": 3}, zero_slots):
+        response = await client.put(path, json=slots)
+        assert response.status_code == 200
+        saved = response.json()
+        assert {key: saved[key] for key in slots} == slots
+        heartbeat = await service.put("/api/crawler-services/c1", json=body)
+        assert heartbeat.status_code == 200
+        reply = heartbeat.json()
+        assert {key: reply[key] for key in slots} == slots
 
-    for invalid in ({"crawl_slots": 99}, {"warm_slots": 0}, {"warm_slots": 17}):
-        assert (await client.put(path, json={**slots, **invalid})).status_code == 422
+    for field, maximum in (("crawl_slots", 16), ("download_slots", 80), ("warm_slots", 16)):
+        for invalid in (-1, maximum + 1):
+            response = await client.put(path, json={**zero_slots, field: invalid})
+            assert response.status_code == 422
+            assert response.json()["detail"][0]["loc"] == ["body", field]
     legacy = await client.put(path, json={"crawl_slots": 2, "download_slots": 5})
-    assert legacy.json()["warm_slots"] == 3
-    assert (await client.put("/api/executors/crawler/nobody/slots", json=slots)).status_code == 404
+    assert legacy.json()["warm_slots"] == 0
+    assert (await client.put("/api/executors/crawler/nobody/slots", json=zero_slots)).status_code == 404
     reply = await service.put("/api/analysis-services/a1", json=body)
     assert reply.json()["crawl_slots"] is None and reply.json()["warm_slots"] is None
 

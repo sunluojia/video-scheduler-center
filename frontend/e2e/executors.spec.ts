@@ -74,7 +74,7 @@ test("登记执行程序后等待心跳，离线记录可删除", async ({ page 
   await expect(online).toBeVisible();
 });
 
-test("在页面上改爬取程序的并发", async ({ page }) => {
+test("保存并重新打开全为 0 的爬取程序并发", async ({ page }) => {
   const now = new Date().toISOString();
   const crawler = {
     kind: "crawler",
@@ -89,22 +89,31 @@ test("在页面上改爬取程序的并发", async ({ page }) => {
     download_slots: 4,
     warm_slots: 1,
   };
+  const executors = [crawler];
   await mockApi(page, {
-    "GET /api/executors": [crawler],
+    "GET /api/executors": executors,
     "GET /api/identities": { target: 8, devices: [], alerts: [] },
     "GET /api/proxy-alerts": [],
-    "PUT /api/executors/crawler/crawler-1/slots": { ...crawler, crawl_slots: 4, warm_slots: 3 },
+  });
+  await page.route("**/api/executors/crawler/crawler-1/slots", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    const slots = route.request().postDataJSON();
+    expect(slots).toEqual({ crawl_slots: 0, download_slots: 0, warm_slots: 0 });
+    executors[0] = { ...crawler, ...slots };
+    await route.fulfill({ json: executors[0] });
   });
   await page.goto("/executors");
 
   await page.getByRole("button", { name: "采集 2 · 下载 4 · 预热 1" }).click();
   const dialog = page.getByRole("dialog", { name: "并发" });
-  await dialog.getByLabel("同时采集达人").fill("4");
-  await dialog.getByLabel("同时预热账号").fill("3");
-  const sent = page.waitForRequest((request) => request.url().endsWith("/slots"));
+  const fields = ["同时采集达人", "同时下载", "同时预热账号"];
+  for (const field of fields) await dialog.getByLabel(field).fill("0");
   await dialog.getByRole("button", { name: "保存" }).click();
-  expect((await sent).postDataJSON()).toEqual({ crawl_slots: 4, download_slots: 4, warm_slots: 3 });
   await expect(page.getByText("crawler-1 下一次心跳（15 秒内）按新的并发运行")).toBeVisible();
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole("button", { name: "采集 0 · 下载 0 · 预热 0" }).click();
+  for (const field of fields) await expect(dialog.getByLabel(field)).toHaveValue("0");
 });
 
 test("爬取程序显示资料、列表和下载三个阶段", async ({ page }) => {

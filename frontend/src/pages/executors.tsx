@@ -324,7 +324,7 @@ function SlotsDialog({ executor }: { executor: Executor }) {
             <Input
               name="crawl_slots"
               type="number"
-              min={1}
+              min={0}
               max={16}
               defaultValue={executor.crawl_slots}
               required
@@ -337,7 +337,7 @@ function SlotsDialog({ executor }: { executor: Executor }) {
             <Input
               name="download_slots"
               type="number"
-              min={1}
+              min={0}
               max={80}
               defaultValue={executor.download_slots}
               required
@@ -347,7 +347,7 @@ function SlotsDialog({ executor }: { executor: Executor }) {
             <Input
               name="warm_slots"
               type="number"
-              min={1}
+              min={0}
               max={16}
               defaultValue={executor.warm_slots ?? 1}
               required
