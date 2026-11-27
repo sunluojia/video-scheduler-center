@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   ChartColumn,
@@ -21,6 +21,7 @@ import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { $api, errorText, fetchClient, type Schemas } from "@/api/client";
+import { AiBatchBadge, AiBatchSwitch } from "@/components/ai-batch-mode";
 import { Confirm } from "@/components/confirm";
 import { CreatorSummaryTags } from "@/components/creator-summary-tags";
 import { DataTable, Pager } from "@/components/data-table";
@@ -142,12 +143,23 @@ function Count({ value }: { value: number }) {
 function Header({ batch }: { batch: BatchRow }) {
   const navigate = useNavigate();
   const done = useDone();
+  const queryClient = useQueryClient();
   const path = { params: { path: { batch_id: batch.id } } };
   const control = {
     onSuccess: (result: Schemas["BatchAction"]) => done("已更新批次状态", result.warnings),
   };
   const start = $api.useMutation("post", "/api/batches/{batch_id}/start", {
     onSuccess: () => done("批次已开始"),
+  });
+  const batchMode = $api.useMutation("put", "/api/batches/{batch_id}/ai-batch-mode", {
+    onSuccess: ({ batch: updated, warnings }) => {
+      const key = $api.queryOptions("get", "/api/batches/{batch_id}", path).queryKey;
+      queryClient.setQueryData<BatchRow>(
+        key,
+        (current) => current && { ...current, ai_batch_mode: updated.ai_batch_mode },
+      );
+      done(updated.ai_batch_mode ? "AI 批量模式已启用" : "AI 批量模式已关闭", warnings);
+    },
   });
   const pause = $api.useMutation("post", "/api/batches/{batch_id}/pause", control);
   const resume = $api.useMutation("post", "/api/batches/{batch_id}/resume", control);
@@ -173,6 +185,7 @@ function Header({ batch }: { batch: BatchRow }) {
         <h1 className="truncate text-xl font-semibold tracking-tight">{batch.name}</h1>
         <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <StatusOf labels={batchStatus} value={batch.status} />
+          {batch.ai_batch_mode && <AiBatchBadge />}
           <span>{batch.source}</span>
           <span>创建于 {dateTime(batch.created_at)}</span>
           {batch.started_at && (
@@ -262,6 +275,16 @@ function Header({ batch }: { batch: BatchRow }) {
           </Confirm>
         )}
       </div>
+      {(active || batch.status === "draft") && (
+        <div className="w-full">
+          <AiBatchSwitch
+            label="AI 批量模式"
+            checked={batch.ai_batch_mode}
+            disabled={batchMode.isPending}
+            onCheckedChange={(enabled) => batchMode.mutate({ ...path, body: { enabled } })}
+          />
+        </div>
+      )}
     </header>
   );
 }

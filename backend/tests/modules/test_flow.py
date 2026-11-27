@@ -58,6 +58,8 @@ async def test_start_publishes_a_crawl_task_for_each_recognizable_creator(databa
 
 async def test_creator_goes_from_crawl_to_summary(database, service):
     batch = await new_batch(database, "alice")
+    async with database.transaction() as session:
+        await Flow(session).set_ai_batch_mode(batch.id, True)
     [alice] = await creators(database, batch)
 
     await crawl(database, alice, video(1), photo(2), video(3))
@@ -73,6 +75,7 @@ async def test_creator_goes_from_crawl_to_summary(database, service):
     for item, text in zip(downloads, ("one", "two"), strict=True):
         assert (await upload(service, item["task_id"], text=text)).status_code == 204
     analyses = await messages(database, "analyze_video")
+    assert all(item["ai_batch_mode"] is True for item in analyses)
     assert [(item["material"]["size"], item["allow_reuse"]) for item in analyses] == [
         (3, True),
         (3, True),
@@ -86,6 +89,7 @@ async def test_creator_goes_from_crawl_to_summary(database, service):
         )
 
     [summary] = await messages(database, "summarize_creator")
+    assert summary["ai_batch_mode"] is True
     assert [item["job_id"] for item in summary["videos"]] == [a["job_id"] for a in analyses]
     assert summary["videos"][1]["recognition"]["tags"] == ["穿搭", "美妆"]
     assert (await load(database, Creator, alice.id)).status == CreatorStatus.SUMMARIZING

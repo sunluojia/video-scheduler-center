@@ -16,6 +16,7 @@ const batch: Schemas["BatchRow"] = {
   name: "本周名单",
   source: "粘贴链接",
   status: "completed",
+  ai_batch_mode: false,
   created_at: updatedAt,
   started_at: updatedAt,
   finished_at: updatedAt,

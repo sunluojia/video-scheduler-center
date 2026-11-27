@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -61,6 +62,7 @@ async def test_batch_is_created_from_links_and_listed_with_progress(client, data
     assert response.status_code == 201
     batch = response.json()
     assert (batch["name"], batch["source"], batch["status"]) == ("十一月", "粘贴链接", "running")
+    assert batch["ai_batch_mode"] is False
     assert len(await messages(database, "crawl_creator")) == 2
 
     page = (await client.get("/api/batches", params={"status": "running"})).json()
@@ -451,7 +453,8 @@ async def test_crawler_slots_set_on_the_page_go_out_with_the_heartbeat(client, s
             assert response.json()["detail"][0]["loc"] == ["body", field]
     legacy = await client.put(path, json={"crawl_slots": 2, "download_slots": 5})
     assert legacy.json()["warm_slots"] == 0
-    assert (await client.put("/api/executors/crawler/nobody/slots", json=zero_slots)).status_code == 404
+    missing = await client.put("/api/executors/crawler/nobody/slots", json=zero_slots)
+    assert missing.status_code == 404
     reply = await service.put("/api/analysis-services/a1", json=body)
     assert reply.json()["crawl_slots"] is None and reply.json()["warm_slots"] is None
 
@@ -684,3 +687,44 @@ async def test_ai_configuration_is_forwarded_to_the_analysis_service(client, dat
         "p1",
         "Bearer test-service-token",
     )
+
+
+async def test_ai_batch_create_start_and_live_toggle(client, database, executors):
+    await register(database, ExecutorKind.ANALYSIS, ANALYSIS_URL)
+    created = await client.post(
+        "/api/batches", data={"name": "batch", "links": "alice", "ai_batch_mode": "true"}
+    )
+    assert created.status_code == 201
+    batch = created.json()
+    assert batch["status"] == "draft" and batch["ai_batch_mode"] is True
+    path = f"/api/batches/{batch['id']}"
+    mode = f"{path}/ai-batch-mode"
+
+    draft = await client.put(mode, json={"enabled": False})
+    assert draft.json()["batch"]["ai_batch_mode"] is False
+    started = await client.post(f"{path}/start")
+    assert started.json()["status"] == "running"
+    enabled = await client.put(mode, json={"enabled": True})
+    assert enabled.json()["batch"]["ai_batch_mode"] is True
+    assert enabled.json()["warnings"] == []
+    assert (await client.get(path)).json()["ai_batch_mode"] is True
+    assert (await client.get("/api/batches")).json()["items"][0]["ai_batch_mode"] is True
+
+    await client.post(f"{path}/pause")
+    paused = await client.put(mode, json={"enabled": False})
+    assert paused.json()["batch"]["ai_batch_mode"] is False
+    analysis_calls = [r for r in executors.requests if r.method == "PUT"]
+    assert [r.url.path for r in analysis_calls] == [mode] * 4
+    assert [json.loads(r.content)["enabled"] for r in analysis_calls] == [False, False, True, False]
+
+    await client.post(f"{path}/cancel")
+    assert (await client.put(mode, json={"enabled": True})).status_code == 409
+    assert (await client.put(mode, json={})).status_code == 422
+
+
+async def test_ai_batch_toggle_saves_when_analysis_is_unreachable(client, database):
+    batch = await new_batch(database, "alice")
+    path = f"/api/batches/{batch.id}"
+    result = await client.put(f"{path}/ai-batch-mode", json={"enabled": True})
+    assert result.status_code == 200 and result.json()["warnings"]
+    assert (await client.get(path)).json()["ai_batch_mode"] is True

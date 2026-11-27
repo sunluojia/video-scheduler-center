@@ -60,6 +60,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/batches/{batch_id}/ai-batch-mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Ai Batch Mode */
+        put: operations["set_ai_batch_mode_api_batches__batch_id__ai_batch_mode_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/batches/{batch_id}/pause": {
         parameters: {
             query?: never;
@@ -1214,6 +1231,11 @@ export interface components {
             /** Count */
             count: number;
         };
+        /** AiBatchMode */
+        AiBatchMode: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** AnalysisAttemptView */
         AnalysisAttemptView: {
             /**
@@ -1269,6 +1291,8 @@ export interface components {
             /** Source */
             source: string;
             status: components["schemas"]["BatchStatus"];
+            /** Ai Batch Mode */
+            ai_batch_mode: boolean;
             /**
              * Created At
              * Format: date-time
@@ -1308,6 +1332,8 @@ export interface components {
             /** Source */
             source: string;
             status: components["schemas"]["BatchStatus"];
+            /** Ai Batch Mode */
+            ai_batch_mode: boolean;
             /**
              * Created At
              * Format: date-time
@@ -1331,6 +1357,11 @@ export interface components {
              * @default false
              */
             start: boolean;
+            /**
+             * Ai Batch Mode
+             * @default false
+             */
+            ai_batch_mode: boolean;
         };
         /** Body_preview_api_imports_preview_post */
         Body_preview_api_imports_preview_post: {
@@ -3324,6 +3355,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BatchView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_ai_batch_mode_api_batches__batch_id__ai_batch_mode_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiBatchMode"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchAction"];
                 };
             };
             /** @description Validation Error */

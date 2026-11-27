@@ -6,6 +6,7 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { z } from "zod";
 import { $api, formData, type Schemas } from "@/api/client";
+import { AiBatchSwitch } from "@/components/ai-batch-mode";
 import { Notice, PageHeader, Panel, Section } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +29,7 @@ const schema = z
     source: z.enum(["file", "links"]),
     file: z.instanceof(File).optional(),
     links: z.string().optional(),
+    ai_batch_mode: z.boolean(),
   })
   .refine((value) => (value.source === "file" ? value.file : value.links?.trim()), {
     message: "请上传名单文件或粘贴主页链接",
@@ -46,9 +48,10 @@ export function NewBatchPage() {
       name: `${format(new Date(), "yyyy-MM-dd")} 达人名单`,
       source: "file",
       links: "",
+      ai_batch_mode: false,
     },
   });
-  const { source, file } = form.watch();
+  const { source, file, ai_batch_mode: batchMode } = form.watch();
   const fields = (values: Form) =>
     values.source === "file" ? { file: values.file } : { links: values.links };
 
@@ -66,7 +69,12 @@ export function NewBatchPage() {
   const save = (start: boolean) =>
     form.handleSubmit((values) =>
       create.mutate({
-        body: { name: values.name, start: String(start), ...fields(values) } as never,
+        body: {
+          name: values.name,
+          start: String(start),
+          ai_batch_mode: String(values.ai_batch_mode),
+          ...fields(values),
+        } as never,
         ...multipart,
       }),
     )();
@@ -135,6 +143,13 @@ export function NewBatchPage() {
               </TabsContent>
             </Tabs>
             <FieldError message={form.formState.errors.source?.message} />
+            <AiBatchSwitch
+              label="启用 AI 批量推理（百炼 Batch API）"
+              checked={batchMode}
+              onCheckedChange={(checked) => form.setValue("ai_batch_mode", checked)}
+              disabled={create.isPending}
+              creation
+            />
             <Button
               variant="secondary"
               className="w-full"

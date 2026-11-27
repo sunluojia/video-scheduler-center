@@ -25,6 +25,7 @@ class JobMessage(BaseModel):
     run: int
     batch_id: UUID
     creator_id: UUID
+    ai_batch_mode: bool | None = None
 
 
 class AnalyzeVideo(JobMessage):

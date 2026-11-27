@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    Boolean,
     Column,
     Integer,
     LargeBinary,
@@ -7,6 +8,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -37,6 +39,7 @@ batches = Table(
     Column("created_at", timestamp(), nullable=False, index=True),
     Column("started_at", timestamp()),
     Column("finished_at", timestamp()),
+    Column("ai_batch_mode", Boolean, nullable=False, server_default=false()),
 )
 
 creators = Table(

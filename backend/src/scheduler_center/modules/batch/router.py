@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated
@@ -8,6 +9,7 @@ import anyio
 from fastapi import APIRouter, Form, Response, UploadFile
 from pydantic import TypeAdapter
 
+from scheduler_center.core.common.errors import Rejected, Unavailable
 from scheduler_center.core.database.engine import Database
 from scheduler_center.core.web.dependencies import DatabaseDep, LegacyCrawlerDispatchDep, PagingDep
 from scheduler_center.core.web.schemas import Page
@@ -26,6 +28,7 @@ from scheduler_center.modules.batch.repository import (
 )
 from scheduler_center.modules.batch.schemas import (
     Affected,
+    AiBatchMode,
     BatchAction,
     BatchRow,
     BatchView,
@@ -44,6 +47,7 @@ from scheduler_center.modules.report.exporter import build_workbook
 from scheduler_center.modules.report.importer import read_roster
 from scheduler_center.modules.report.service import load_creator_results
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/batches", tags=["批次"])
 job_states = TypeAdapter(list[JobState])
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -64,10 +68,12 @@ async def list_batches(
 async def create(
     database: DatabaseDep,
     legacy_crawler_dispatch: LegacyCrawlerDispatchDep,
+    gateway: GatewayDep,
     name: Annotated[str, Form(min_length=1, max_length=128)],
     file: UploadFile | None = None,
     links: Annotated[str | None, Form()] = None,
     start: Annotated[bool, Form()] = False,
+    ai_batch_mode: Annotated[bool, Form()] = False,
 ) -> BatchView:
     """上传 Excel 名单或粘贴主页链接建批次；可以同时开始。"""
     content = await file.read() if file else None
@@ -75,9 +81,10 @@ async def create(
         read_roster, file and file.filename, content, links
     )
     async with database.transaction() as session:
-        batch = await create_batch(session, name.strip(), source, rows)
+        batch = await create_batch(session, name.strip(), source, rows, ai_batch_mode=ai_batch_mode)
         if start:
             await Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch).start(batch.id)
+            await _sync_ai_batch_mode(gateway, batch)
     return BatchView.model_validate(batch)
 
 
@@ -91,11 +98,40 @@ async def get_batch(batch_id: UUID, database: DatabaseDep) -> BatchRow:
 
 @router.post("/{batch_id}/start")
 async def start(
-    batch_id: UUID, database: DatabaseDep, legacy_crawler_dispatch: LegacyCrawlerDispatchDep
+    batch_id: UUID,
+    database: DatabaseDep,
+    legacy_crawler_dispatch: LegacyCrawlerDispatchDep,
+    gateway: GatewayDep,
 ) -> BatchView:
     async with database.transaction() as session:
         batch = await Flow(session, legacy_crawler_dispatch=legacy_crawler_dispatch).start(batch_id)
+        await _sync_ai_batch_mode(gateway, batch)
     return BatchView.model_validate(batch)
+
+
+@router.put("/{batch_id}/ai-batch-mode")
+async def set_ai_batch_mode(
+    batch_id: UUID, mode: AiBatchMode, database: DatabaseDep, gateway: GatewayDep
+) -> BatchAction:
+    async with database.transaction() as session:
+        batch = await Flow(session).set_ai_batch_mode(batch_id, mode.enabled)
+        # Keep updates for the same batch ordered through analysis acknowledgement.
+        warnings = await _sync_ai_batch_mode(gateway, batch)
+    return BatchAction(batch=BatchView.model_validate(batch), warnings=warnings)
+
+
+async def _sync_ai_batch_mode(gateway: Gateway, batch: Batch) -> list[str]:
+    try:
+        await gateway.call(
+            ExecutorKind.ANALYSIS,
+            "PUT",
+            f"/api/batches/{batch.id}/ai-batch-mode",
+            json={"enabled": batch.ai_batch_mode},
+        )
+    except Rejected, Unavailable:
+        log.warning("Analysis did not acknowledge AI Batch mode for batch %s", batch.id)
+        return ["分析服务未确认 AI 批量模式，请稍后重试同步。"]
+    return []
 
 
 @router.post("/{batch_id}/pause")

@@ -31,6 +31,12 @@ class Batch:
     started_at: datetime | None = None
     """开始时间，也是爬取的截止时间：只取此前发布的作品。"""
     finished_at: datetime | None = None
+    ai_batch_mode: bool = False
+
+    def set_ai_batch_mode(self, enabled: bool) -> None:
+        if self.status not in (BatchStatus.DRAFT, BatchStatus.RUNNING, BatchStatus.PAUSED):
+            raise Conflict("只有草稿、进行中或已暂停的批次可以切换 AI 批量模式")
+        self.ai_batch_mode = enabled
 
     def start(self, now: datetime) -> None:
         if self.status != BatchStatus.DRAFT:

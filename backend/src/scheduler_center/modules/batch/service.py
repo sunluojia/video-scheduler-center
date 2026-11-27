@@ -21,9 +21,16 @@ PLAYBACK_RESTRICTIONS = frozenset(
 """爬虫通过 download_failed 上报的确切原因。普通取链失败可能没有媒体地址，但要单独处理。"""
 
 
-async def create_batch(session: AsyncSession, name: str, source: str, rows: list[ImportRow]):
+async def create_batch(
+    session: AsyncSession,
+    name: str,
+    source: str,
+    rows: list[ImportRow],
+    *,
+    ai_batch_mode: bool = False,
+) -> Batch:
     """按名单顺序建立批次和达人；同一账号重复出现时各行都保留。"""
-    batch = Batch(name, source)
+    batch = Batch(name, source, ai_batch_mode=ai_batch_mode)
     session.add(batch)
     creators = CreatorRepository(session)
     qr_codes = []

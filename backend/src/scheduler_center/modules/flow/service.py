@@ -134,6 +134,12 @@ class Flow:
         await self._live.changed(batch.id)
         return batch
 
+    async def set_ai_batch_mode(self, batch_id: UUID, enabled: bool) -> Batch:
+        batch = await self._batches.require(Batch, batch_id, lock=True)
+        batch.set_ai_batch_mode(enabled)
+        await self._live.changed(batch.id)
+        return batch
+
     async def pause(self, batch_id: UUID) -> Batch:
         """暂停采集：爬取程序不再开始这个批次新的获取作品，已锁定作品的下载、识别和汇总照常。
 
@@ -657,6 +663,7 @@ class Flow:
             self._jobs.add(job)
         else:
             job.resubmit(now)
+        batch = await self._batches.require(Batch, creator.batch_id)
         message = AnalyzeVideo(
             job_id=job.id,
             run=job.run,
@@ -666,6 +673,7 @@ class Flow:
             description=work.description,
             topics=work.topics,
             allow_reuse=job.run == 1,
+            ai_batch_mode=batch.ai_batch_mode,
         )
         await self._publish(job, ANALYZE_VIDEO, message)
         work.tags = None
@@ -707,11 +715,13 @@ class Flow:
             self._jobs.add(summary)
         else:
             summary.resubmit(now, sources)
+        batch = await self._batches.require(Batch, creator.batch_id)
         message = SummarizeCreator(
             job_id=summary.id,
             run=summary.run,
             batch_id=creator.batch_id,
             creator_id=creator.id,
+            ai_batch_mode=batch.ai_batch_mode,
             videos=[
                 SourceVideo(
                     job_id=jobs[work.id].id,

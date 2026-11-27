@@ -28,6 +28,7 @@ class BatchView(View):
     name: str
     source: str
     status: BatchStatus
+    ai_batch_mode: bool
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -40,6 +41,10 @@ class BatchRow(BatchView):
     """工作台上各阶段的达人数。"""
     videos: dict[WorkStatus, int]
     """每种状态的视频数。"""
+
+
+class AiBatchMode(BaseModel):
+    enabled: bool
 
 
 class BatchAction(BaseModel):

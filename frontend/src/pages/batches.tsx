@@ -2,6 +2,7 @@ import { AlertTriangle, Plus, Search } from "lucide-react";
 import { useState } from "react";
 import { Link, Navigate, NavLink, Outlet } from "react-router";
 import { $api, type Schemas } from "@/api/client";
+import { AiBatchBadge } from "@/components/ai-batch-mode";
 import { Notice, Panel, QueryState } from "@/components/page";
 import { SegmentBar, StatusOf } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -140,6 +141,7 @@ function BatchItem({ batch }: { batch: BatchRow }) {
       >
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{batch.name}</span>
+          {batch.ai_batch_mode && <AiBatchBadge />}
           <span className="ml-auto shrink-0">
             <StatusOf labels={batchStatus} value={batch.status} />
           </span>

@@ -8,6 +8,7 @@ const batch = {
   name: "女装达人",
   source: "links",
   status: "running",
+  ai_batch_mode: false,
   created_at: now,
   started_at: now,
   finished_at: null,
@@ -51,6 +52,7 @@ const creator = {
 };
 
 test("粘贴链接新建批次并进入详情", async ({ page }) => {
+  const planned = { ...batch, ai_batch_mode: true };
   await mockApi(page, {
     "POST /api/imports/preview": {
       source: "links",
@@ -66,10 +68,10 @@ test("粘贴链接新建批次并进入详情", async ({ page }) => {
       ],
       invalid: 1,
     },
-    "POST /api/batches": batch,
-    "GET /api/batches": { items: [batch], total: 1 },
+    "POST /api/batches": planned,
+    "GET /api/batches": { items: [planned], total: 1 },
     "GET /api/executors": [],
-    [`GET /api/batches/${BATCH_ID}`]: batch,
+    [`GET /api/batches/${BATCH_ID}`]: planned,
     [`GET /api/batches/${BATCH_ID}/creators`]: { items: [creator], total: 1 },
   });
 
@@ -82,8 +84,17 @@ test("粘贴链接新建批次并进入详情", async ({ page }) => {
   await expect(page.getByText("无法识别").first()).toBeVisible();
   await expect(page.getByRole("cell", { name: "alice", exact: true })).toBeVisible();
 
+  const mode = page.getByRole("switch", { name: /Batch API/ });
+  await expect(mode).not.toBeChecked();
+  await mode.click();
+  await expect(mode).toBeChecked();
+  const request = page.waitForRequest(
+    (item) => item.method() === "POST" && new URL(item.url()).pathname === "/api/batches",
+  );
   await page.getByRole("button", { name: "保存并开始" }).click();
+  expect((await request).postData()).toMatch(/name="ai_batch_mode"\r?\n\r?\ntrue/);
   await expect(page).toHaveURL(`/batches/${BATCH_ID}`);
+  await expect(page.getByRole("switch", { name: "AI 批量模式" })).toBeChecked();
   await expect(page.getByRole("heading", { name: "女装达人" })).toBeVisible();
   await expect(page.getByRole("cell", { name: /alice/ }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "暂停采集" })).toBeVisible();
@@ -401,4 +412,43 @@ test("后端暂时无法读取批次时显示错误信息", async ({ page }) => 
   await page.goto(`/batches/${BATCH_ID}`);
   await expect(page.getByText("暂时无法读取批次")).toBeVisible();
   await expect(page).toHaveURL(`/batches/${BATCH_ID}`);
+});
+
+test("运行中的批次可以切换 AI 批量模式并处理保存失败", async ({ page }) => {
+  let enabled = false;
+  let fail = false;
+  await mockApi(page, {
+    [`GET /api/batches/${BATCH_ID}/creators`]: { items: [creator], total: 1 },
+  });
+  await page.route(`**/api/batches?*`, (route) =>
+    route.fulfill({ json: { items: [{ ...batch, ai_batch_mode: enabled }], total: 1 } }),
+  );
+  await page.route(`**/api/batches/${BATCH_ID}`, (route) =>
+    route.fulfill({ json: { ...batch, ai_batch_mode: enabled } }),
+  );
+  await page.route(`**/api/batches/${BATCH_ID}/ai-batch-mode`, (route) => {
+    expect(route.request().method()).toBe("PUT");
+    if (fail) return route.fulfill({ status: 503, json: { detail: "分析服务暂不可用" } });
+    enabled = route.request().postDataJSON().enabled;
+    return route.fulfill({ json: { batch: { ...batch, ai_batch_mode: enabled }, warnings: [] } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/batches/${BATCH_ID}`);
+  const mode = page.getByRole("switch", { name: "AI 批量模式" });
+  await expect(mode).not.toBeChecked();
+  await expect(mode).toHaveAccessibleDescription(/听音.*实时推理/);
+  await mode.press("Space");
+  await expect(mode).toBeChecked();
+  await expect(page.getByText("AI 批量", { exact: true })).toHaveCount(2);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(mode).toBeVisible();
+  fail = true;
+  await mode.click();
+  await expect(page.getByText("分析服务暂不可用")).toBeVisible();
+  await expect(mode).toBeChecked();
+  fail = false;
+  await mode.click();
+  await expect(mode).not.toBeChecked();
 });
